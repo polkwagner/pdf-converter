@@ -40,6 +40,9 @@ python pdf_to_markdown.py ./casebooks/ --batch
 
 # Recursive conversion (includes subdirectories)
 python pdf_to_markdown.py ./casebooks/ --batch --recursive
+
+# Save detailed JSON report
+python pdf_to_markdown.py ./casebooks/ --batch --save-report
 ```
 
 ### Page Range Selection
@@ -92,6 +95,71 @@ The verification tool compares:
 - ✓ **PASSED** - Conversion is complete and accurate
 - ⚠ **WARNING** - Minor issues (e.g., image-heavy pages detected)
 - ✗ **FAILED** - Significant content loss detected
+
+## Conversion Reports
+
+### Single File Report
+
+Each conversion displays detailed statistics:
+```
+============================================================
+📄 CONVERSION REPORT
+============================================================
+✓ Status:     SUCCESS
+⏱  Time:       9.47s
+📊 Statistics:
+   Pages:     40
+   Words:     18,092
+   Characters: 125,506
+   Headings:  33
+   Tables:    4
+📁 Output:    chapter.md
+============================================================
+```
+
+### Batch Report
+
+Batch conversions provide comprehensive summaries:
+```
+============================================================
+📊 BATCH CONVERSION SUMMARY
+============================================================
+Files processed:  6
+✓ Successful:     6
+✗ Failed:         0
+⏱  Total time:     219.7s
+📄 Total pages:    1,309
+📝 Total words:    646,140
+⚡ Avg speed:      36.6s per file
+============================================================
+```
+
+### JSON Report
+
+Use `--save-report` to generate a detailed JSON file with per-file statistics:
+```json
+{
+  "summary": {
+    "files_processed": 6,
+    "successful": 6,
+    "total_pages": 1309,
+    "total_words": 646140
+  },
+  "files": [
+    {
+      "status": "success",
+      "input_file": "chapter.pdf",
+      "conversion_time": 59.44,
+      "statistics": {
+        "pages": 352,
+        "words": 174385,
+        "headings": 305,
+        "tables": 4
+      }
+    }
+  ]
+}
+```
 
 ## Output Format
 

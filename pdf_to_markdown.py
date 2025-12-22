@@ -24,8 +24,10 @@ Examples:
 import argparse
 import os
 import sys
+import time
+import json
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 try:
     from docling.document_converter import DocumentConverter
@@ -35,13 +37,39 @@ except ImportError:
     sys.exit(1)
 
 
+def print_conversion_report(report: Dict):
+    """Print formatted conversion report."""
+    print("\n" + "="*60)
+    print("📄 CONVERSION REPORT")
+    print("="*60)
+
+    if report['status'] == 'success':
+        stats = report['statistics']
+        print(f"✓ Status:     SUCCESS")
+        print(f"⏱  Time:       {report['conversion_time']}s")
+        print(f"📊 Statistics:")
+        print(f"   Pages:     {stats['pages']}")
+        print(f"   Words:     {stats['words']:,}")
+        print(f"   Characters: {stats['characters']:,}")
+        print(f"   Headings:  {stats['headings']}")
+        print(f"   Tables:    {stats['tables']}")
+        print(f"📁 Output:    {Path(report['output_file']).name}")
+    else:
+        print(f"✗ Status:     FAILED")
+        print(f"⏱  Time:       {report['conversion_time']}s")
+        print(f"❌ Error:     {report['error']}")
+
+    print("="*60 + "\n")
+
+
 def convert_pdf_to_markdown(
     pdf_path: str,
     output_path: Optional[str] = None,
     pages: Optional[List[int]] = None,
     extract_images: bool = False,
-    ocr: bool = False
-) -> str:
+    ocr: bool = False,
+    report: bool = True
+) -> Dict:
     """
     Convert a PDF file to markdown format using Docling.
 
@@ -64,6 +92,9 @@ def convert_pdf_to_markdown(
 
     print(f"Converting: {pdf_path}")
     print(f"Output: {output_path}")
+
+    # Track conversion time
+    start_time = time.time()
 
     # Initialize DocumentConverter
     # Docling will use default settings optimized for high-fidelity conversion
@@ -89,25 +120,57 @@ def convert_pdf_to_markdown(
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(full_content)
 
-        # Get file size info
+        # Calculate conversion time
+        conversion_time = time.time() - start_time
+
+        # Analyze content
+        lines = full_content.split('\n')
+        headings = [line for line in lines if line.strip().startswith('#')]
+        tables = [i for i in range(len(lines)-2)
+                 if lines[i].startswith('|') and lines[i+1].startswith('|') and '---' in lines[i+1]]
+
+        # Get document statistics
         char_count = len(full_content)
         word_count = len(full_content.split())
-        page_count = result.document.page_count if hasattr(result.document, 'page_count') else '?'
+        page_count = len(result.document.pages) if hasattr(result.document, 'pages') else 0
 
-        print(f"✓ Successfully converted ({page_count} pages, {char_count:,} chars, ~{word_count:,} words)")
+        # Build report
+        conversion_report = {
+            'status': 'success',
+            'input_file': pdf_path,
+            'output_file': str(output_path),
+            'conversion_time': round(conversion_time, 2),
+            'statistics': {
+                'pages': page_count,
+                'characters': char_count,
+                'words': word_count,
+                'headings': len(headings),
+                'tables': len(tables)
+            }
+        }
 
-        return full_content
+        if report:
+            print_conversion_report(conversion_report)
+
+        return conversion_report
 
     except Exception as e:
+        error_report = {
+            'status': 'error',
+            'input_file': pdf_path,
+            'error': str(e),
+            'conversion_time': round(time.time() - start_time, 2)
+        }
         print(f"✗ Error converting {pdf_path}: {e}")
-        raise
+        return error_report
 
 
 def batch_convert_directory(
     input_dir: str,
     output_dir: Optional[str] = None,
-    recursive: bool = False
-) -> None:
+    recursive: bool = False,
+    save_report: bool = False
+) -> Dict:
     """
     Convert all PDF files in a directory to markdown.
 
@@ -134,6 +197,10 @@ def batch_convert_directory(
 
     success_count = 0
     error_count = 0
+    total_time = 0
+    total_words = 0
+    total_pages = 0
+    reports = []
 
     # Convert each PDF
     for i, pdf_path in enumerate(pdf_files, 1):
@@ -154,20 +221,72 @@ def batch_convert_directory(
             out_path = pdf_path.with_suffix('.md')
 
         try:
-            convert_pdf_to_markdown(
+            report = convert_pdf_to_markdown(
                 str(pdf_path),
                 str(out_path),
                 extract_images=False,
-                ocr=False
+                ocr=False,
+                report=False  # Don't print individual reports in batch mode
             )
-            success_count += 1
+            reports.append(report)
+
+            if report['status'] == 'success':
+                success_count += 1
+                total_time += report['conversion_time']
+                total_words += report['statistics']['words']
+                total_pages += report['statistics']['pages']
+                print(f"   ✓ {report['statistics']['pages']} pages, {report['statistics']['words']:,} words, {report['conversion_time']}s")
+            else:
+                error_count += 1
+                print(f"   ✗ Failed: {report.get('error', 'Unknown error')}")
+
         except Exception as e:
             print(f"✗ Failed: {e}")
             error_count += 1
+            reports.append({
+                'status': 'error',
+                'input_file': str(pdf_path),
+                'error': str(e)
+            })
             continue
 
+    # Print batch summary
     print("\n" + "=" * 60)
-    print(f"Batch conversion complete! ({success_count} successful, {error_count} failed)")
+    print("📊 BATCH CONVERSION SUMMARY")
+    print("=" * 60)
+    print(f"Files processed:  {len(pdf_files)}")
+    print(f"✓ Successful:     {success_count}")
+    print(f"✗ Failed:         {error_count}")
+    print(f"⏱  Total time:     {total_time:.1f}s")
+    print(f"📄 Total pages:    {total_pages:,}")
+    print(f"📝 Total words:    {total_words:,}")
+    if success_count > 0:
+        print(f"⚡ Avg speed:      {total_time/success_count:.1f}s per file")
+    print("=" * 60)
+
+    # Save report to JSON if requested
+    if save_report:
+        report_path = Path(output_dir if output_dir else input_dir) / 'conversion_report.json'
+        batch_report = {
+            'summary': {
+                'files_processed': len(pdf_files),
+                'successful': success_count,
+                'failed': error_count,
+                'total_time': round(total_time, 2),
+                'total_pages': total_pages,
+                'total_words': total_words
+            },
+            'files': reports
+        }
+        with open(report_path, 'w') as f:
+            json.dump(batch_report, f, indent=2)
+        print(f"\n📄 Detailed report saved to: {report_path}")
+
+    return {
+        'success_count': success_count,
+        'error_count': error_count,
+        'reports': reports
+    }
 
 
 def parse_page_range(page_range: str) -> List[int]:
@@ -236,6 +355,12 @@ Examples:
         help='Enable OCR for scanned documents (slower but handles image-based PDFs)'
     )
 
+    parser.add_argument(
+        '--save-report',
+        action='store_true',
+        help='Save detailed conversion report to JSON file (batch mode only)'
+    )
+
     args = parser.parse_args()
 
     # Check if input exists
@@ -258,7 +383,8 @@ Examples:
         batch_convert_directory(
             args.input,
             output_dir=args.output,
-            recursive=args.recursive
+            recursive=args.recursive,
+            save_report=args.save_report
         )
     else:
         convert_pdf_to_markdown(
