@@ -29,9 +29,6 @@ from typing import Optional, List
 
 try:
     from docling.document_converter import DocumentConverter
-    from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
-    from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 except ImportError:
     print("ERROR: Docling not installed.")
     print("Install with: pip install docling")
@@ -68,17 +65,9 @@ def convert_pdf_to_markdown(
     print(f"Converting: {pdf_path}")
     print(f"Output: {output_path}")
 
-    # Configure Docling pipeline options
-    pipeline_options = PdfPipelineOptions()
-    pipeline_options.do_ocr = ocr
-    pipeline_options.do_table_structure = True  # Enable table structure recognition
-
-    # Initialize DocumentConverter with options
-    converter = DocumentConverter(
-        format_options={
-            InputFormat.PDF: pipeline_options,
-        }
-    )
+    # Initialize DocumentConverter
+    # Docling will use default settings optimized for high-fidelity conversion
+    converter = DocumentConverter()
 
     try:
         # Convert the PDF
