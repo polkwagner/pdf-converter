@@ -65,6 +65,34 @@ python pdf_to_markdown.py input.pdf --images
 python pdf_to_markdown.py scanned_casebook.pdf --ocr
 ```
 
+## Verification
+
+Verify conversion completeness to ensure all content was captured:
+
+### Single File Verification
+
+```bash
+python verify_conversion.py source.pdf output.md
+```
+
+### Batch Verification
+
+```bash
+# Verify all markdown files against source PDFs
+python verify_conversion.py --batch output_dir/ --pdf-dir source_dir/
+```
+
+The verification tool compares:
+- **Page counts** - Number of pages in PDF
+- **Word/character counts** - Retention ratios (typically 95-105%)
+- **Table detection** - Verifies tables were converted
+- **Image analysis** - Flags potentially scanned pages
+
+**Verification Status:**
+- ✓ **PASSED** - Conversion is complete and accurate
+- ⚠ **WARNING** - Minor issues (e.g., image-heavy pages detected)
+- ✗ **FAILED** - Significant content loss detected
+
 ## Output Format
 
 The generated markdown includes:
