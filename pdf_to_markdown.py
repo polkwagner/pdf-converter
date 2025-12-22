@@ -26,6 +26,8 @@ import os
 import sys
 import time
 import json
+import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -37,29 +39,80 @@ except ImportError:
     sys.exit(1)
 
 
-def print_conversion_report(report: Dict):
-    """Print formatted conversion report."""
-    print("\n" + "="*60)
-    print("📄 CONVERSION REPORT")
-    print("="*60)
+def setup_logging(log_file: Optional[str] = None, verbose: bool = False):
+    """
+    Configure logging to both console and file.
+
+    Args:
+        log_file: Optional path to log file. If None, uses default location.
+        verbose: If True, show DEBUG messages
+    """
+    # Create logger
+    logger = logging.getLogger('pdf_converter')
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+    # Remove existing handlers
+    logger.handlers = []
+
+    # Console handler - INFO and above
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_format = logging.Formatter('%(message)s')
+    console_handler.setFormatter(console_format)
+    logger.addHandler(console_handler)
+
+    # File handler - DEBUG and above
+    if log_file:
+        file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        file_format = logging.Formatter(
+            '%(asctime)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(file_format)
+        logger.addHandler(file_handler)
+
+        # Log session start
+        logger.info("="*60)
+        logger.info(f"PDF to Markdown Converter - Session Started")
+        logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("="*60)
+
+    return logger
+
+
+def print_conversion_report(report: Dict, logger: logging.Logger = None):
+    """Print and log formatted conversion report."""
+    if logger is None:
+        logger = logging.getLogger('pdf_converter')
+
+    output = []
+    output.append("\n" + "="*60)
+    output.append("📄 CONVERSION REPORT")
+    output.append("="*60)
 
     if report['status'] == 'success':
         stats = report['statistics']
-        print(f"✓ Status:     SUCCESS")
-        print(f"⏱  Time:       {report['conversion_time']}s")
-        print(f"📊 Statistics:")
-        print(f"   Pages:     {stats['pages']}")
-        print(f"   Words:     {stats['words']:,}")
-        print(f"   Characters: {stats['characters']:,}")
-        print(f"   Headings:  {stats['headings']}")
-        print(f"   Tables:    {stats['tables']}")
-        print(f"📁 Output:    {Path(report['output_file']).name}")
+        output.append(f"✓ Status:     SUCCESS")
+        output.append(f"⏱  Time:       {report['conversion_time']}s")
+        output.append(f"📊 Statistics:")
+        output.append(f"   Pages:     {stats['pages']}")
+        output.append(f"   Words:     {stats['words']:,}")
+        output.append(f"   Characters: {stats['characters']:,}")
+        output.append(f"   Headings:  {stats['headings']}")
+        output.append(f"   Tables:    {stats['tables']}")
+        output.append(f"📁 Output:    {Path(report['output_file']).name}")
     else:
-        print(f"✗ Status:     FAILED")
-        print(f"⏱  Time:       {report['conversion_time']}s")
-        print(f"❌ Error:     {report['error']}")
+        output.append(f"✗ Status:     FAILED")
+        output.append(f"⏱  Time:       {report['conversion_time']}s")
+        output.append(f"❌ Error:     {report['error']}")
 
-    print("="*60 + "\n")
+    output.append("="*60 + "\n")
+
+    # Print and log
+    report_text = '\n'.join(output)
+    print(report_text)
+    logger.info(report_text)
 
 
 def convert_pdf_to_markdown(
@@ -68,7 +121,8 @@ def convert_pdf_to_markdown(
     pages: Optional[List[int]] = None,
     extract_images: bool = False,
     ocr: bool = False,
-    report: bool = True
+    report: bool = True,
+    logger: logging.Logger = None
 ) -> Dict:
     """
     Convert a PDF file to markdown format using Docling.
@@ -83,6 +137,9 @@ def convert_pdf_to_markdown(
     Returns:
         str: The generated markdown content
     """
+    if logger is None:
+        logger = logging.getLogger('pdf_converter')
+
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
@@ -90,8 +147,8 @@ def convert_pdf_to_markdown(
     if output_path is None:
         output_path = Path(pdf_path).with_suffix('.md')
 
-    print(f"Converting: {pdf_path}")
-    print(f"Output: {output_path}")
+    logger.info(f"Converting: {pdf_path}")
+    logger.info(f"Output: {output_path}")
 
     # Track conversion time
     start_time = time.time()
@@ -150,7 +207,7 @@ def convert_pdf_to_markdown(
         }
 
         if report:
-            print_conversion_report(conversion_report)
+            print_conversion_report(conversion_report, logger)
 
         return conversion_report
 
@@ -161,7 +218,7 @@ def convert_pdf_to_markdown(
             'error': str(e),
             'conversion_time': round(time.time() - start_time, 2)
         }
-        print(f"✗ Error converting {pdf_path}: {e}")
+        logger.error(f"✗ Error converting {pdf_path}: {e}")
         return error_report
 
 
@@ -169,7 +226,8 @@ def batch_convert_directory(
     input_dir: str,
     output_dir: Optional[str] = None,
     recursive: bool = False,
-    save_report: bool = False
+    save_report: bool = False,
+    logger: logging.Logger = None
 ) -> Dict:
     """
     Convert all PDF files in a directory to markdown.
@@ -178,7 +236,12 @@ def batch_convert_directory(
         input_dir: Directory containing PDF files
         output_dir: Optional output directory. If None, outputs alongside PDFs.
         recursive: Whether to process subdirectories
+        save_report: Whether to save JSON report
+        logger: Logger instance
     """
+    if logger is None:
+        logger = logging.getLogger('pdf_converter')
+
     input_path = Path(input_dir)
 
     if not input_path.is_dir():
@@ -189,11 +252,11 @@ def batch_convert_directory(
     pdf_files = list(input_path.glob(pattern))
 
     if not pdf_files:
-        print(f"No PDF files found in {input_dir}")
+        logger.warning(f"No PDF files found in {input_dir}")
         return
 
-    print(f"Found {len(pdf_files)} PDF file(s) to convert")
-    print("-" * 60)
+    logger.info(f"Found {len(pdf_files)} PDF file(s) to convert")
+    logger.info("-" * 60)
 
     success_count = 0
     error_count = 0
@@ -204,7 +267,7 @@ def batch_convert_directory(
 
     # Convert each PDF
     for i, pdf_path in enumerate(pdf_files, 1):
-        print(f"\n[{i}/{len(pdf_files)}] Processing: {pdf_path.name}")
+        logger.info(f"\n[{i}/{len(pdf_files)}] Processing: {pdf_path.name}")
 
         # Determine output path
         if output_dir:
@@ -226,7 +289,8 @@ def batch_convert_directory(
                 str(out_path),
                 extract_images=False,
                 ocr=False,
-                report=False  # Don't print individual reports in batch mode
+                report=False,  # Don't print individual reports in batch mode
+                logger=logger
             )
             reports.append(report)
 
@@ -235,13 +299,13 @@ def batch_convert_directory(
                 total_time += report['conversion_time']
                 total_words += report['statistics']['words']
                 total_pages += report['statistics']['pages']
-                print(f"   ✓ {report['statistics']['pages']} pages, {report['statistics']['words']:,} words, {report['conversion_time']}s")
+                logger.info(f"   ✓ {report['statistics']['pages']} pages, {report['statistics']['words']:,} words, {report['conversion_time']}s")
             else:
                 error_count += 1
-                print(f"   ✗ Failed: {report.get('error', 'Unknown error')}")
+                logger.error(f"   ✗ Failed: {report.get('error', 'Unknown error')}")
 
         except Exception as e:
-            print(f"✗ Failed: {e}")
+            logger.error(f"✗ Failed: {e}")
             error_count += 1
             reports.append({
                 'status': 'error',
@@ -251,18 +315,26 @@ def batch_convert_directory(
             continue
 
     # Print batch summary
-    print("\n" + "=" * 60)
-    print("📊 BATCH CONVERSION SUMMARY")
-    print("=" * 60)
-    print(f"Files processed:  {len(pdf_files)}")
-    print(f"✓ Successful:     {success_count}")
-    print(f"✗ Failed:         {error_count}")
-    print(f"⏱  Total time:     {total_time:.1f}s")
-    print(f"📄 Total pages:    {total_pages:,}")
-    print(f"📝 Total words:    {total_words:,}")
+    summary = [
+        "\n" + "=" * 60,
+        "📊 BATCH CONVERSION SUMMARY",
+        "=" * 60,
+        f"Files processed:  {len(pdf_files)}",
+        f"✓ Successful:     {success_count}",
+        f"✗ Failed:         {error_count}",
+        f"⏱  Total time:     {total_time:.1f}s",
+        f"📄 Total pages:    {total_pages:,}",
+        f"📝 Total words:    {total_words:,}"
+    ]
+
     if success_count > 0:
-        print(f"⚡ Avg speed:      {total_time/success_count:.1f}s per file")
-    print("=" * 60)
+        summary.append(f"⚡ Avg speed:      {total_time/success_count:.1f}s per file")
+
+    summary.append("=" * 60)
+
+    summary_text = '\n'.join(summary)
+    print(summary_text)
+    logger.info(summary_text)
 
     # Save report to JSON if requested
     if save_report:
@@ -280,7 +352,10 @@ def batch_convert_directory(
         }
         with open(report_path, 'w') as f:
             json.dump(batch_report, f, indent=2)
-        print(f"\n📄 Detailed report saved to: {report_path}")
+
+        msg = f"\n📄 Detailed report saved to: {report_path}"
+        print(msg)
+        logger.info(msg)
 
     return {
         'success_count': success_count,
@@ -361,6 +436,17 @@ Examples:
         help='Save detailed conversion report to JSON file (batch mode only)'
     )
 
+    parser.add_argument(
+        '--log-file',
+        help='Path to log file (default: conversion.log in output directory)'
+    )
+
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Enable verbose logging (DEBUG level)'
+    )
+
     args = parser.parse_args()
 
     # Check if input exists
@@ -368,14 +454,29 @@ Examples:
         print(f"Error: Input path does not exist: {args.input}")
         sys.exit(1)
 
+    # Setup logging
+    if args.log_file:
+        log_path = args.log_file
+    elif args.batch or os.path.isdir(args.input):
+        # Default log file for batch mode
+        output_location = args.output if args.output else args.input
+        log_path = Path(output_location) / 'conversion.log'
+    else:
+        # Default log file for single file mode
+        output_location = Path(args.output).parent if args.output else Path(args.input).parent
+        log_path = output_location / 'conversion.log'
+
+    logger = setup_logging(str(log_path), verbose=args.verbose)
+    logger.info(f"Log file: {log_path}")
+
     # Parse page range if provided
     pages = None
     if args.pages:
         try:
             pages = parse_page_range(args.pages)
-            print(f"Converting pages: {args.pages} (0-indexed: {pages})")
+            logger.info(f"Converting pages: {args.pages} (0-indexed: {pages})")
         except Exception as e:
-            print(f"Error parsing page range: {e}")
+            logger.error(f"Error parsing page range: {e}")
             sys.exit(1)
 
     # Batch or single file mode
@@ -384,7 +485,8 @@ Examples:
             args.input,
             output_dir=args.output,
             recursive=args.recursive,
-            save_report=args.save_report
+            save_report=args.save_report,
+            logger=logger
         )
     else:
         convert_pdf_to_markdown(
@@ -392,8 +494,13 @@ Examples:
             output_path=args.output,
             pages=pages,
             extract_images=args.images,
-            ocr=args.ocr
+            ocr=args.ocr,
+            logger=logger
         )
+
+    logger.info("\n" + "="*60)
+    logger.info("Session completed")
+    logger.info("="*60)
 
 
 if __name__ == '__main__':

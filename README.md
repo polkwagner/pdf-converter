@@ -96,6 +96,35 @@ The verification tool compares:
 - ⚠ **WARNING** - Minor issues (e.g., image-heavy pages detected)
 - ✗ **FAILED** - Significant content loss detected
 
+## Logging
+
+All conversions are automatically logged to `conversion.log`:
+
+```bash
+# Default: saves to conversion.log in output directory
+python pdf_to_markdown.py input.pdf
+
+# Custom log file location
+python pdf_to_markdown.py input.pdf --log-file /path/to/custom.log
+
+# Verbose logging (includes DEBUG messages)
+python pdf_to_markdown.py input.pdf -v
+```
+
+**Log file includes:**
+- Timestamps for all operations
+- Conversion progress and statistics
+- Error messages and stack traces
+- Session start/end markers
+
+**Example log entry:**
+```
+2025-12-22 09:41:27 - INFO - Converting: Chapter_I_Introduction.pdf
+2025-12-22 09:41:27 - INFO - Output: Chapter_I_Introduction.md
+2025-12-22 09:41:36 - INFO - ✓ Status: SUCCESS
+2025-12-22 09:41:36 - INFO - ⏱  Time: 8.77s
+```
+
 ## Conversion Reports
 
 ### Single File Report

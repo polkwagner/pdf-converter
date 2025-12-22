@@ -32,6 +32,10 @@ htmlcov/
 !CLAUDE.md
 *.pdf
 
+# Logs
+*.log
+conversion.log
+
 # OS
 .DS_Store
 Thumbs.db
