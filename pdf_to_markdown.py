@@ -88,30 +88,31 @@ def print_conversion_report(report: Dict, logger: logging.Logger = None):
 
     output = []
     output.append("\n" + "="*60)
-    output.append("📄 CONVERSION REPORT")
+    output.append("CONVERSION REPORT")
     output.append("="*60)
 
     if report['status'] == 'success':
         stats = report['statistics']
-        output.append(f"✓ Status:     SUCCESS")
-        output.append(f"⏱  Time:       {report['conversion_time']}s")
-        output.append(f"📊 Statistics:")
-        output.append(f"   Pages:     {stats['pages']}")
-        output.append(f"   Words:     {stats['words']:,}")
-        output.append(f"   Characters: {stats['characters']:,}")
-        output.append(f"   Headings:  {stats['headings']}")
-        output.append(f"   Tables:    {stats['tables']}")
-        output.append(f"📁 Output:    {Path(report['output_file']).name}")
+        output.append(f"Status:       SUCCESS")
+        output.append(f"Time:         {report['conversion_time']}s")
+        output.append(f"")
+        output.append(f"Statistics:")
+        output.append(f"  Pages:      {stats['pages']}")
+        output.append(f"  Words:      {stats['words']:,}")
+        output.append(f"  Characters: {stats['characters']:,}")
+        output.append(f"  Headings:   {stats['headings']}")
+        output.append(f"  Tables:     {stats['tables']}")
+        output.append(f"")
+        output.append(f"Output:       {Path(report['output_file']).name}")
     else:
-        output.append(f"✗ Status:     FAILED")
-        output.append(f"⏱  Time:       {report['conversion_time']}s")
-        output.append(f"❌ Error:     {report['error']}")
+        output.append(f"Status:       FAILED")
+        output.append(f"Time:         {report['conversion_time']}s")
+        output.append(f"Error:        {report['error']}")
 
-    output.append("="*60 + "\n")
+    output.append("="*60)
 
-    # Print and log
+    # Log only (console handler will print it)
     report_text = '\n'.join(output)
-    print(report_text)
     logger.info(report_text)
 
 
@@ -145,7 +146,11 @@ def convert_pdf_to_markdown(
 
     # Determine output path
     if output_path is None:
-        output_path = Path(pdf_path).with_suffix('.md')
+        # Create 'converted' subfolder in same directory as PDF
+        pdf_dir = Path(pdf_path).parent
+        output_dir = pdf_dir / 'converted'
+        output_dir.mkdir(exist_ok=True)
+        output_path = output_dir / Path(pdf_path).with_suffix('.md').name
 
     logger.info(f"Converting: {pdf_path}")
     logger.info(f"Output: {output_path}")
@@ -255,7 +260,15 @@ def batch_convert_directory(
         logger.warning(f"No PDF files found in {input_dir}")
         return
 
+    # If no output_dir specified, create 'converted' subfolder in input directory
+    if output_dir is None:
+        output_dir = input_path / 'converted'
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
     logger.info(f"Found {len(pdf_files)} PDF file(s) to convert")
+    logger.info(f"Output directory: {output_path}")
     logger.info("-" * 60)
 
     success_count = 0
@@ -270,18 +283,14 @@ def batch_convert_directory(
         logger.info(f"\n[{i}/{len(pdf_files)}] Processing: {pdf_path.name}")
 
         # Determine output path
-        if output_dir:
-            out_dir = Path(output_dir)
-            out_dir.mkdir(parents=True, exist_ok=True)
-            # Preserve subdirectory structure if recursive
-            if recursive:
-                rel_path = pdf_path.relative_to(input_path)
-                out_path = out_dir / rel_path.with_suffix('.md')
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-            else:
-                out_path = out_dir / pdf_path.with_suffix('.md').name
+        out_dir = Path(output_dir)
+        # Preserve subdirectory structure if recursive
+        if recursive:
+            rel_path = pdf_path.relative_to(input_path)
+            out_path = out_dir / rel_path.with_suffix('.md')
+            out_path.parent.mkdir(parents=True, exist_ok=True)
         else:
-            out_path = pdf_path.with_suffix('.md')
+            out_path = out_dir / pdf_path.with_suffix('.md').name
 
         try:
             report = convert_pdf_to_markdown(
@@ -317,23 +326,25 @@ def batch_convert_directory(
     # Print batch summary
     summary = [
         "\n" + "=" * 60,
-        "📊 BATCH CONVERSION SUMMARY",
+        "BATCH CONVERSION SUMMARY",
         "=" * 60,
         f"Files processed:  {len(pdf_files)}",
-        f"✓ Successful:     {success_count}",
-        f"✗ Failed:         {error_count}",
-        f"⏱  Total time:     {total_time:.1f}s",
-        f"📄 Total pages:    {total_pages:,}",
-        f"📝 Total words:    {total_words:,}"
+        f"  Successful:     {success_count}",
+        f"  Failed:         {error_count}",
+        f"",
+        f"Totals:",
+        f"  Time:           {total_time:.1f}s",
+        f"  Pages:          {total_pages:,}",
+        f"  Words:          {total_words:,}"
     ]
 
     if success_count > 0:
-        summary.append(f"⚡ Avg speed:      {total_time/success_count:.1f}s per file")
+        summary.append(f"")
+        summary.append(f"Average:          {total_time/success_count:.1f}s per file")
 
     summary.append("=" * 60)
 
     summary_text = '\n'.join(summary)
-    print(summary_text)
     logger.info(summary_text)
 
     # Save report to JSON if requested
@@ -353,9 +364,7 @@ def batch_convert_directory(
         with open(report_path, 'w') as f:
             json.dump(batch_report, f, indent=2)
 
-        msg = f"\n📄 Detailed report saved to: {report_path}"
-        print(msg)
-        logger.info(msg)
+        logger.info(f"\nDetailed report saved to: {report_path}")
 
     return {
         'success_count': success_count,
@@ -458,12 +467,20 @@ Examples:
     if args.log_file:
         log_path = args.log_file
     elif args.batch or os.path.isdir(args.input):
-        # Default log file for batch mode
-        output_location = args.output if args.output else args.input
-        log_path = Path(output_location) / 'conversion.log'
+        # Default log file for batch mode - in 'converted' subfolder
+        if args.output:
+            output_location = Path(args.output)
+        else:
+            output_location = Path(args.input) / 'converted'
+        output_location.mkdir(parents=True, exist_ok=True)
+        log_path = output_location / 'conversion.log'
     else:
-        # Default log file for single file mode
-        output_location = Path(args.output).parent if args.output else Path(args.input).parent
+        # Default log file for single file mode - in 'converted' subfolder
+        if args.output:
+            output_location = Path(args.output).parent
+        else:
+            output_location = Path(args.input).parent / 'converted'
+        output_location.mkdir(parents=True, exist_ok=True)
         log_path = output_location / 'conversion.log'
 
     logger = setup_logging(str(log_path), verbose=args.verbose)
