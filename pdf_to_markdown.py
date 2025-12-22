@@ -3,7 +3,8 @@
 pdf_to_markdown.py
 
 Convert PDF files (especially large casebooks) to markdown format optimized for AI tools.
-Uses pymupdf4llm for intelligent text extraction with structure preservation.
+Uses Docling (IBM Research) for state-of-the-art high-fidelity PDF conversion with advanced
+layout analysis, table recognition, and structure preservation.
 
 Usage:
     python pdf_to_markdown.py <input_pdf> [-o <output_file>]
@@ -27,29 +28,32 @@ from pathlib import Path
 from typing import Optional, List
 
 try:
-    import pymupdf4llm
+    from docling.document_converter import DocumentConverter
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 except ImportError:
-    print("ERROR: pymupdf4llm not installed.")
-    print("Install with: pip install pymupdf4llm")
+    print("ERROR: Docling not installed.")
+    print("Install with: pip install docling")
     sys.exit(1)
-
-import fitz  # PyMuPDF
 
 
 def convert_pdf_to_markdown(
     pdf_path: str,
     output_path: Optional[str] = None,
     pages: Optional[List[int]] = None,
-    write_images: bool = False
+    extract_images: bool = False,
+    ocr: bool = False
 ) -> str:
     """
-    Convert a PDF file to markdown format.
+    Convert a PDF file to markdown format using Docling.
 
     Args:
         pdf_path: Path to the input PDF file
         output_path: Optional path for output markdown file. If None, uses same name as PDF.
         pages: Optional list of page numbers to convert (0-indexed)
-        write_images: Whether to extract and save images (default: False for text-only)
+        extract_images: Whether to extract and save images (default: False for text-only)
+        ocr: Whether to use OCR for scanned documents (default: False)
 
     Returns:
         str: The generated markdown content
@@ -64,19 +68,30 @@ def convert_pdf_to_markdown(
     print(f"Converting: {pdf_path}")
     print(f"Output: {output_path}")
 
-    # Convert PDF to markdown using pymupdf4llm
-    # This library is optimized for LLM consumption
+    # Configure Docling pipeline options
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.do_ocr = ocr
+    pipeline_options.do_table_structure = True  # Enable table structure recognition
+
+    # Initialize DocumentConverter with options
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: pipeline_options,
+        }
+    )
+
     try:
-        md_text = pymupdf4llm.to_markdown(
-            pdf_path,
-            pages=pages,
-            write_images=write_images,
-        )
+        # Convert the PDF
+        result = converter.convert(pdf_path)
+
+        # Export to markdown
+        md_text = result.document.export_to_markdown()
 
         # Add metadata header
         pdf_name = Path(pdf_path).name
         header = f"# {Path(pdf_path).stem}\n\n"
         header += f"*Converted from: {pdf_name}*\n\n"
+        header += f"*Conversion tool: Docling (IBM Research)*\n\n"
         header += "---\n\n"
 
         full_content = header + md_text
@@ -88,7 +103,9 @@ def convert_pdf_to_markdown(
         # Get file size info
         char_count = len(full_content)
         word_count = len(full_content.split())
-        print(f"✓ Successfully converted ({char_count:,} chars, ~{word_count:,} words)")
+        page_count = result.document.page_count if hasattr(result.document, 'page_count') else '?'
+
+        print(f"✓ Successfully converted ({page_count} pages, {char_count:,} chars, ~{word_count:,} words)")
 
         return full_content
 
@@ -148,7 +165,12 @@ def batch_convert_directory(
             out_path = pdf_path.with_suffix('.md')
 
         try:
-            convert_pdf_to_markdown(str(pdf_path), str(out_path))
+            convert_pdf_to_markdown(
+                str(pdf_path),
+                str(out_path),
+                extract_images=False,
+                ocr=False
+            )
             success_count += 1
         except Exception as e:
             print(f"✗ Failed: {e}")
@@ -219,6 +241,12 @@ Examples:
         help='Extract and save images from PDF'
     )
 
+    parser.add_argument(
+        '--ocr',
+        action='store_true',
+        help='Enable OCR for scanned documents (slower but handles image-based PDFs)'
+    )
+
     args = parser.parse_args()
 
     # Check if input exists
@@ -248,7 +276,8 @@ Examples:
             args.input,
             output_path=args.output,
             pages=pages,
-            write_images=args.images
+            extract_images=args.images,
+            ocr=args.ocr
         )
 
 

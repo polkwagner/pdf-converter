@@ -1,2 +1,1 @@
-pymupdf4llm>=0.0.16
-PyMuPDF>=1.23.0
+docling>=2.0.0

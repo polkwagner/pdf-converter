@@ -1,13 +1,17 @@
 # PDF to Markdown Converter
 
-Convert PDF files (especially large legal casebooks) to markdown format optimized for AI tools.
+Convert PDF files (especially large legal casebooks) to markdown format optimized for AI tools using **Docling** - IBM Research's state-of-the-art PDF conversion tool.
 
 ## Features
 
-- Intelligent text extraction with structure preservation
-- Batch processing of multiple PDFs
-- Page range selection
-- Optimized for LLM consumption (Claude, GPT-4, etc.)
+- **Advanced layout analysis** - Preserves document structure with high fidelity
+- **Table structure recognition** - Maintains complex table formatting
+- **Heading hierarchy detection** - Proper markdown heading levels
+- **Formula extraction** - Handles mathematical notation (if present)
+- **OCR support** - Optional OCR for scanned documents
+- **Batch processing** - Convert entire directories of PDFs
+- **Page range selection** - Extract specific sections
+- **Optimized for AI** - Output tailored for LLM consumption (Claude, GPT-4, etc.)
 
 ## Installation
 
@@ -54,6 +58,13 @@ python pdf_to_markdown.py casebook.pdf --pages 1-10,25-35 -o sections.md
 python pdf_to_markdown.py input.pdf --images
 ```
 
+### OCR for Scanned Documents
+
+```bash
+# Enable OCR for image-based PDFs (slower but necessary for scanned docs)
+python pdf_to_markdown.py scanned_casebook.pdf --ocr
+```
+
 ## Output Format
 
 The generated markdown includes:
@@ -66,8 +77,16 @@ The generated markdown includes:
 ## Requirements
 
 - Python 3.8+
-- pymupdf4llm
-- PyMuPDF (fitz)
+- Docling (includes all necessary dependencies)
+
+## Why Docling?
+
+Docling is IBM Research's state-of-the-art PDF conversion tool that significantly outperforms other solutions for complex documents:
+
+- Better table structure preservation than PyMuPDF or pdfplumber
+- Advanced layout analysis for multi-column documents
+- Superior heading detection and hierarchy
+- Optimized specifically for feeding documents to LLMs
 
 ## Use Cases
 
@@ -75,6 +94,7 @@ The generated markdown includes:
 - Converting academic papers for LLM context
 - Creating searchable markdown archives
 - RAG (Retrieval-Augmented Generation) pipelines
+- Building knowledge bases from PDF documentation
 
 ## License
 
