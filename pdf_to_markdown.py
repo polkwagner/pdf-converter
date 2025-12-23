@@ -865,13 +865,26 @@ def insert_page_markers_hybrid(md_text: str, pdf_path: str, doc=None, logger: lo
 
         logger.debug(f"After table recovery: {pages_found}/{len(pages)} pages")
 
-    # Apply insertions in reverse order to maintain position validity
-    insertions.sort(key=lambda x: x[0], reverse=True)
+    # Apply insertions using list-based approach (O(n) instead of O(n²))
+    # Sort in forward order (not reverse)
+    insertions.sort(key=lambda x: x[0])
+
+    # Build result efficiently using list parts
+    result_parts = []
+    last_pos = 0
 
     for pos, marker in insertions:
-        marked_text = marked_text[:pos] + marker + marked_text[pos:]
+        # Add text segment since last insertion
+        result_parts.append(marked_text[last_pos:pos])
+        # Add marker
+        result_parts.append(marker)
+        last_pos = pos
 
-    return marked_text
+    # Add remaining text after last insertion
+    result_parts.append(marked_text[last_pos:])
+
+    # Join all parts once at the end (much faster than repeated concatenation)
+    return ''.join(result_parts)
 
 
 def add_page_markers(md_text: str, pdf_path: str, doc=None, logger: logging.Logger = None) -> str:
