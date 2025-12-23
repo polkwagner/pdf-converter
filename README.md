@@ -82,8 +82,10 @@ The tool uses a sophisticated hybrid approach combining two methods for maximum 
 
 **Accuracy:**
 - Tested on 40-page legal casebook: **100% of pages accurately marked**
+- Tested on 122-page chapter (pages 41-162): **100% accuracy**
 - Handles complex multi-page tables
 - Preserves original PDF page numbers (critical for citations)
+- **Automatically detects PDF page labels** (e.g., Chapter 2 starting at page 41)
 - Works with blank pages and image-heavy documents
 
 ### Extract Images

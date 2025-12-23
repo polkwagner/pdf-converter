@@ -405,29 +405,88 @@ def parse_page_range(page_range: str) -> List[int]:
     return pages
 
 
-def extract_page_text_with_pymupdf(pdf_path: str) -> List[Dict]:
+def extract_page_text_with_pymupdf(pdf_path: str, logger: logging.Logger = None) -> List[Dict]:
     """
     Extract text from each page separately using PyMuPDF for accurate page tracking.
 
+    Respects PDF page labels if present (e.g., Chapter 2 starting at page 41).
+
     Args:
         pdf_path: Path to PDF file
+        logger: Optional logger for debugging
 
     Returns:
-        List of dicts with page_number (1-indexed) and text for each page
+        List of dicts with page_number (actual page number) and text for each page
     """
+    if logger is None:
+        logger = logging.getLogger('pdf_converter')
+
     doc = fitz.open(pdf_path)
     pages = []
 
-    for page_num in range(len(doc)):
-        page = doc[page_num]
+    # Check for PDF page labels (metadata that defines actual page numbers)
+    page_labels = None
+    try:
+        page_labels = doc.get_page_labels()
+        if page_labels:
+            logger.debug(f"PDF has page labels: {page_labels}")
+    except:
+        pass
+
+    # Determine actual page numbers for each PDF page
+    for page_idx in range(len(doc)):
+        page = doc[page_idx]
         text = page.get_text()
+
+        # Calculate actual page number
+        if page_labels:
+            # Use PDF page labels to get the real page number
+            actual_page_num = get_actual_page_number(page_idx, page_labels)
+        else:
+            # No labels - use sequential numbering starting at 1
+            actual_page_num = page_idx + 1
+
         pages.append({
-            'page_number': page_num + 1,  # 1-indexed
+            'page_number': actual_page_num,
             'text': text.strip()
         })
 
+    if page_labels:
+        logger.debug(f"Page numbering: PDF pages 0-{len(doc)-1} → actual pages {pages[0]['page_number']}-{pages[-1]['page_number']}")
+
     doc.close()
     return pages
+
+
+def get_actual_page_number(page_idx: int, page_labels: List[Dict]) -> int:
+    """
+    Convert PDF page index to actual page number using page labels.
+
+    Args:
+        page_idx: 0-based index of page in PDF
+        page_labels: List of page label rules from PyMuPDF
+
+    Returns:
+        Actual page number for this page
+    """
+    # Page labels format: [{'startpage': 0, 'prefix': '', 'firstpagenum': 41, 'style': 'D'}, ...]
+    # Find the applicable label rule for this page
+    applicable_rule = None
+    for label in reversed(page_labels):  # Check from end to find last applicable rule
+        if page_idx >= label.get('startpage', 0):
+            applicable_rule = label
+            break
+
+    if not applicable_rule:
+        # No rule found - use default sequential numbering
+        return page_idx + 1
+
+    # Calculate page number based on the rule
+    start_page = applicable_rule.get('startpage', 0)
+    first_num = applicable_rule.get('firstpagenum', 1)
+    offset = page_idx - start_page
+
+    return first_num + offset
 
 
 def normalize_text(text: str) -> str:
@@ -625,7 +684,7 @@ def insert_page_markers_hybrid(md_text: str, pdf_path: str, doc=None, logger: lo
         logger = logging.getLogger('pdf_converter')
 
     # Extract page-by-page text using PyMuPDF
-    pages = extract_page_text_with_pymupdf(pdf_path)
+    pages = extract_page_text_with_pymupdf(pdf_path, logger)
 
     if not pages:
         return md_text
