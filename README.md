@@ -58,18 +58,21 @@ python pdf_to_markdown.py casebook.pdf --pages 1-10,25-35 -o sections.md
 
 ### Page Number Markers (for AI/RAG)
 
-Add page number markers to track original PDF page numbers - essential for citations and RAG systems:
+**Page markers are enabled by default** to track original PDF page numbers - essential for citations and RAG systems:
 
 ```bash
-# Single file with page markers
-python pdf_to_markdown.py casebook.pdf --page-markers -o casebook.md
+# Page markers are automatic
+python pdf_to_markdown.py casebook.pdf -o casebook.md
 
-# Batch conversion with page markers
-python pdf_to_markdown.py ./casebooks/ --batch --page-markers
+# Batch conversion (page markers included)
+python pdf_to_markdown.py ./casebooks/ --batch
 
 # Page range with original numbering preserved
-python pdf_to_markdown.py casebook.pdf --pages 45-67 --page-markers -o chapter3.md
+python pdf_to_markdown.py casebook.pdf --pages 45-67 -o chapter3.md
 # Output shows: <!-- Page 45 -->, <!-- Page 46 -->, etc.
+
+# Disable page markers if needed
+python pdf_to_markdown.py casebook.pdf --no-page-markers -o casebook.md
 ```
 
 **Output format:**

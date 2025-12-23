@@ -123,7 +123,7 @@ def convert_pdf_to_markdown(
     extract_images: bool = False,
     ocr: bool = False,
     report: bool = True,
-    page_markers: bool = False,
+    page_markers: bool = True,
     logger: logging.Logger = None
 ) -> Dict:
     """
@@ -135,7 +135,7 @@ def convert_pdf_to_markdown(
         pages: Optional list of page numbers to convert (0-indexed)
         extract_images: Whether to extract and save images (default: False for text-only)
         ocr: Whether to use OCR for scanned documents (default: False)
-        page_markers: Whether to add page number markers to output (default: False)
+        page_markers: Whether to add page number markers to output (default: True)
 
     Returns:
         str: The generated markdown content
@@ -238,7 +238,7 @@ def batch_convert_directory(
     output_dir: Optional[str] = None,
     recursive: bool = False,
     save_report: bool = False,
-    page_markers: bool = False,
+    page_markers: bool = True,
     logger: logging.Logger = None
 ) -> Dict:
     """
@@ -249,7 +249,7 @@ def batch_convert_directory(
         output_dir: Optional output directory. If None, outputs alongside PDFs.
         recursive: Whether to process subdirectories
         save_report: Whether to save JSON report
-        page_markers: Whether to add page number markers to output
+        page_markers: Whether to add page number markers to output (default: True)
         logger: Logger instance
     """
     if logger is None:
@@ -494,9 +494,10 @@ Examples:
     )
 
     parser.add_argument(
-        '--page-markers',
-        action='store_true',
-        help='Add page number markers (<!-- Page N -->) to output'
+        '--no-page-markers',
+        dest='page_markers',
+        action='store_false',
+        help='Disable page number markers (enabled by default)'
     )
 
     parser.add_argument(
