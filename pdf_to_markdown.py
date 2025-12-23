@@ -401,34 +401,25 @@ def add_page_markers(md_text: str, doc=None) -> str:
     """
     Add page number markers to markdown content.
 
-    Replaces Docling's page break markers with formatted HTML comments
-    like <!-- Page N --> where N is the actual PDF page number (1-indexed).
+    NOTE: Currently disabled for multi-page documents because Docling doesn't
+    provide reliable page boundary information in the markdown export.
+    Adding inaccurate page markers would be worse than no markers for legal citations.
 
     Args:
         md_text: Markdown text (may contain page break markers)
         doc: DoclingDocument object with page information
 
     Returns:
-        Markdown text with page markers added
+        Markdown text with page markers added (only for single-page docs)
     """
     import re
 
-    # Check for our temporary placeholder first
-    if "##PAGE_BREAK##" in md_text:
-        # Count occurrences to build page numbers
-        parts = md_text.split("##PAGE_BREAK##")
-        result = f"<!-- Page 1 -->\n\n{parts[0]}"
-        for i, part in enumerate(parts[1:], start=2):
-            result += f"\n\n<!-- Page {i} -->\n\n{part}"
-        return result
-
-    # Pattern to match Docling's internal page break markers
-    # Format: #_#_DOCLING_DOC_PAGE_BREAK_<prev_page>_<next_page>_#_#
+    # Check for Docling's internal page break markers (which include accurate page numbers)
     pattern = r"#_#_DOCLING_DOC_PAGE_BREAK_(\d+)_(\d+)_#_#"
     matches = list(re.finditer(pattern, md_text))
 
     if matches:
-        # We have internal markers - process them
+        # We have internal markers with accurate page numbers - process them
         first_match = matches[0]
         first_page = int(first_match.group(1)) + 1  # Convert 0-indexed to 1-indexed
 
@@ -441,76 +432,13 @@ def add_page_markers(md_text: str, doc=None) -> str:
         md_text = f"<!-- Page {first_page} -->\n\n{md_text}"
         return md_text
 
-    # No markers found - use document structure fallback
-    if doc and hasattr(doc, 'pages') and len(doc.pages) > 1:
-        return add_page_markers_from_structure(md_text, doc)
-    else:
+    # For single-page documents, we can safely add Page 1
+    if doc and hasattr(doc, 'pages') and len(doc.pages) == 1:
         return f"<!-- Page 1 -->\n\n{md_text}"
 
-
-def add_page_markers_from_structure(md_text: str, doc) -> str:
-    """
-    Fallback method to add page markers by analyzing document structure.
-    Uses a heuristic approach: distribute page markers evenly across major headings.
-    """
-    num_pages = len(doc.pages)
-    if num_pages <= 1:
-        return f"<!-- Page 1 -->\n\n{md_text}"
-
-    # Find all major headings (## level, which Docling uses for main sections)
-    md_lines = md_text.split('\n')
-    heading_indices = []
-    for i, line in enumerate(md_lines):
-        if line.startswith('## '):
-            heading_indices.append(i)
-
-    # If we have roughly the same number of headings as pages, assume each heading starts a new page
-    if len(heading_indices) >= num_pages - 1:
-        result_lines = []
-        page_num = 1
-        heading_num = 0
-
-        for i, line in enumerate(md_lines):
-            # Check if this is a major heading
-            if line.startswith('## '):
-                heading_num += 1
-                # Insert page marker before this heading (if not the first heading)
-                if heading_num > 1 and page_num < num_pages:
-                    result_lines.append("")
-                    page_num += 1
-                    result_lines.append(f"<!-- Page {page_num} -->")
-                    result_lines.append("")
-                elif heading_num == 1:
-                    # First heading gets Page 1 marker
-                    result_lines.append("<!-- Page 1 -->")
-                    result_lines.append("")
-
-            result_lines.append(line)
-
-        return '\n'.join(result_lines)
-
-    # Fallback: distribute pages evenly through the content
-    result_lines = []
-    lines_per_page = len(md_lines) / num_pages
-
-    result_lines.append("<!-- Page 1 -->")
-    result_lines.append("")
-
-    current_page = 1
-    for i, line in enumerate(md_lines):
-        # Check if we should insert a new page marker
-        expected_page = int(i / lines_per_page) + 1
-        if expected_page > current_page and expected_page <= num_pages:
-            # Insert marker at a heading if possible
-            if line.startswith('#'):
-                result_lines.append("")
-                result_lines.append(f"<!-- Page {expected_page} -->")
-                result_lines.append("")
-                current_page = expected_page
-
-        result_lines.append(line)
-
-    return '\n'.join(result_lines)
+    # Multi-page documents: DO NOT add inaccurate markers
+    # Return original text without markers rather than guessing
+    return md_text
 
 
 def main():
