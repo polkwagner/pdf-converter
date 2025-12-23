@@ -123,6 +123,7 @@ def convert_pdf_to_markdown(
     extract_images: bool = False,
     ocr: bool = False,
     report: bool = True,
+    page_markers: bool = False,
     logger: logging.Logger = None
 ) -> Dict:
     """
@@ -134,6 +135,7 @@ def convert_pdf_to_markdown(
         pages: Optional list of page numbers to convert (0-indexed)
         extract_images: Whether to extract and save images (default: False for text-only)
         ocr: Whether to use OCR for scanned documents (default: False)
+        page_markers: Whether to add page number markers to output (default: False)
 
     Returns:
         str: The generated markdown content
@@ -166,8 +168,12 @@ def convert_pdf_to_markdown(
         # Convert the PDF
         result = converter.convert(pdf_path)
 
-        # Export to markdown
+        # Export to markdown (with internal page break markers if multi-page)
         md_text = result.document.export_to_markdown()
+
+        # Add page markers if requested
+        if page_markers:
+            md_text = add_page_markers(md_text)
 
         # Add metadata header
         pdf_name = Path(pdf_path).name
@@ -232,6 +238,7 @@ def batch_convert_directory(
     output_dir: Optional[str] = None,
     recursive: bool = False,
     save_report: bool = False,
+    page_markers: bool = False,
     logger: logging.Logger = None
 ) -> Dict:
     """
@@ -242,6 +249,7 @@ def batch_convert_directory(
         output_dir: Optional output directory. If None, outputs alongside PDFs.
         recursive: Whether to process subdirectories
         save_report: Whether to save JSON report
+        page_markers: Whether to add page number markers to output
         logger: Logger instance
     """
     if logger is None:
@@ -299,6 +307,7 @@ def batch_convert_directory(
                 extract_images=False,
                 ocr=False,
                 report=False,  # Don't print individual reports in batch mode
+                page_markers=page_markers,
                 logger=logger
             )
             reports.append(report)
@@ -388,6 +397,51 @@ def parse_page_range(page_range: str) -> List[int]:
     return pages
 
 
+def add_page_markers(md_text: str) -> str:
+    """
+    Add page number markers to markdown content.
+
+    Replaces Docling's internal page break markers with formatted HTML comments
+    like <!-- Page N --> where N is the actual PDF page number (1-indexed).
+
+    Args:
+        md_text: Markdown text potentially containing internal markers
+
+    Returns:
+        Markdown text with page markers added
+    """
+    import re
+
+    # Pattern to match Docling's internal page break markers
+    # Format: #_#_DOCLING_DOC_PAGE_BREAK_<prev_page>_<next_page>_#_#
+    # where prev_page and next_page are 0-indexed
+    pattern = r"#_#_DOCLING_DOC_PAGE_BREAK_(\d+)_(\d+)_#_#"
+
+    # Find all markers to determine first page
+    matches = list(re.finditer(pattern, md_text))
+
+    if not matches:
+        # No page breaks found, assume single page document
+        return f"<!-- Page 1 -->\n\n{md_text}"
+
+    # Extract first page number from first marker's prev_page
+    first_match = matches[0]
+    first_page = int(first_match.group(1)) + 1  # Convert to 1-indexed
+
+    # Replace all markers with page-specific comments
+    def replacement(match):
+        next_page = int(match.group(2))
+        # next_page is 0-indexed, convert to 1-indexed PDF page number
+        return f"<!-- Page {next_page + 1} -->"
+
+    md_text = re.sub(pattern, replacement, md_text)
+
+    # Add marker for first page at document start
+    md_text = f"<!-- Page {first_page} -->\n\n{md_text}"
+
+    return md_text
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Convert PDF files to markdown optimized for AI tools',
@@ -437,6 +491,12 @@ Examples:
         '--ocr',
         action='store_true',
         help='Enable OCR for scanned documents (slower but handles image-based PDFs)'
+    )
+
+    parser.add_argument(
+        '--page-markers',
+        action='store_true',
+        help='Add page number markers (<!-- Page N -->) to output'
     )
 
     parser.add_argument(
@@ -503,6 +563,7 @@ Examples:
             output_dir=args.output,
             recursive=args.recursive,
             save_report=args.save_report,
+            page_markers=args.page_markers,
             logger=logger
         )
     else:
@@ -512,6 +573,7 @@ Examples:
             pages=pages,
             extract_images=args.images,
             ocr=args.ocr,
+            page_markers=args.page_markers,
             logger=logger
         )
 
