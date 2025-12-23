@@ -73,19 +73,28 @@ python pdf_to_markdown.py document.pdf --no-page-markers -o output.md
 
 **How it works - Hybrid Approach:**
 
-The tool uses a sophisticated hybrid approach combining two methods for maximum accuracy:
+The tool uses a sophisticated hybrid approach combining multiple methods for maximum accuracy:
 
-1. **PyMuPDF Text Extraction**: Extracts text from each PDF page separately to know exact page boundaries
-2. **Fuzzy Text Matching**: Matches PyMuPDF's page-specific text against Docling's markdown using multiple strategies
-3. **Table-Aware Detection**: For pages with tables (where text structure differs significantly), uses Docling's table provenance information to locate page breaks
-4. **Positional Estimation**: For blank/image-only pages, estimates position based on document structure
+1. **PDF Page Label Detection**: Automatically reads PDF metadata for page numbering
+   - Supports different numbering styles: Arabic (1, 2, 3), Roman (i, ii, iii), Letters (a, b, c)
+   - Handles prefixes (e.g., "A-1" for appendices)
+   - Supports multiple numbering schemes (e.g., roman numerals for front matter, then arabic for body)
+2. **PyMuPDF Text Extraction**: Extracts text from each PDF page separately to know exact page boundaries
+3. **Fuzzy Text Matching**: Matches PyMuPDF's page-specific text against Docling's markdown using multiple strategies
+4. **Table-Aware Detection**: For pages with tables (where text structure differs significantly), uses Docling's table provenance information to locate page breaks
+5. **Positional Estimation**: For blank/image-only pages, estimates position based on document structure
 
 **Accuracy:**
 - Tested on 40-page legal casebook: **100% of pages accurately marked**
 - Tested on 122-page chapter (pages 41-162): **100% accuracy**
 - Handles complex multi-page tables
-- Preserves original PDF page numbers (critical for citations)
-- **Automatically detects PDF page labels** (e.g., Chapter 2 starting at page 41)
+- **Full PDF page label support:**
+  - ✓ Non-sequential numbering (Chapter 2 starting at page 41)
+  - ✓ Roman numerals (i, ii, iii, iv...)
+  - ✓ Uppercase/lowercase variants (I/i, A/a)
+  - ✓ Letter sequences (a, b, c... z, aa, ab...)
+  - ✓ Prefixes (Appendix A-1, A-2...)
+  - ✓ Multiple numbering schemes (roman front matter → arabic body → appendix)
 - Works with blank pages and image-heavy documents
 
 ### Extract Images

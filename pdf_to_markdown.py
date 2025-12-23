@@ -458,18 +458,22 @@ def extract_page_text_with_pymupdf(pdf_path: str, logger: logging.Logger = None)
     return pages
 
 
-def get_actual_page_number(page_idx: int, page_labels: List[Dict]) -> int:
+def get_actual_page_number(page_idx: int, page_labels: List[Dict]):
     """
-    Convert PDF page index to actual page number using page labels.
+    Convert PDF page index to actual page label using page labels.
+
+    Supports different numbering styles (arabic, roman, letters) and prefixes.
 
     Args:
         page_idx: 0-based index of page in PDF
         page_labels: List of page label rules from PyMuPDF
 
     Returns:
-        Actual page number for this page
+        Actual page label for this page (e.g., "41", "iv", "A-3")
     """
     # Page labels format: [{'startpage': 0, 'prefix': '', 'firstpagenum': 41, 'style': 'D'}, ...]
+    # Styles: D=decimal, r=roman lower, R=roman upper, a=letters lower, A=letters upper
+
     # Find the applicable label rule for this page
     applicable_rule = None
     for label in reversed(page_labels):  # Check from end to find last applicable rule
@@ -481,12 +485,72 @@ def get_actual_page_number(page_idx: int, page_labels: List[Dict]) -> int:
         # No rule found - use default sequential numbering
         return page_idx + 1
 
-    # Calculate page number based on the rule
+    # Calculate offset from start of this numbering section
     start_page = applicable_rule.get('startpage', 0)
     first_num = applicable_rule.get('firstpagenum', 1)
     offset = page_idx - start_page
+    page_num = first_num + offset
 
-    return first_num + offset
+    # Get style and prefix
+    style = applicable_rule.get('style', 'D')
+    prefix = applicable_rule.get('prefix', '')
+
+    # Format the page number based on style
+    if style == 'D':
+        # Decimal (1, 2, 3...)
+        formatted_num = str(page_num)
+    elif style == 'r':
+        # Lowercase Roman (i, ii, iii...)
+        formatted_num = to_roman(page_num).lower()
+    elif style == 'R':
+        # Uppercase Roman (I, II, III...)
+        formatted_num = to_roman(page_num)
+    elif style == 'a':
+        # Lowercase letters (a, b, c...)
+        formatted_num = to_letters(page_num).lower()
+    elif style == 'A':
+        # Uppercase letters (A, B, C...)
+        formatted_num = to_letters(page_num)
+    else:
+        # Unknown style - fall back to decimal
+        formatted_num = str(page_num)
+
+    # Combine prefix and formatted number
+    return f"{prefix}{formatted_num}"
+
+
+def to_roman(num: int) -> str:
+    """Convert integer to Roman numeral."""
+    val = [
+        1000, 900, 500, 400,
+        100, 90, 50, 40,
+        10, 9, 5, 4,
+        1
+    ]
+    syms = [
+        "M", "CM", "D", "CD",
+        "C", "XC", "L", "XL",
+        "X", "IX", "V", "IV",
+        "I"
+    ]
+    roman_num = ''
+    i = 0
+    while num > 0:
+        for _ in range(num // val[i]):
+            roman_num += syms[i]
+            num -= val[i]
+        i += 1
+    return roman_num
+
+
+def to_letters(num: int) -> str:
+    """Convert integer to letters (A, B, C, ... Z, AA, AB, ...)."""
+    result = ""
+    while num > 0:
+        num -= 1
+        result = chr(65 + (num % 26)) + result
+        num //= 26
+    return result
 
 
 def normalize_text(text: str) -> str:
