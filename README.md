@@ -8,6 +8,7 @@ Convert PDF files (especially large legal casebooks) to markdown format optimize
 - **Table structure recognition** - Maintains complex table formatting
 - **Heading hierarchy detection** - Proper markdown heading levels
 - **Formula extraction** - Handles mathematical notation (if present)
+- **Page number markers** - Add HTML comment markers for AI/RAG citation tracking
 - **OCR support** - Optional OCR for scanned documents
 - **Batch processing** - Convert entire directories of PDFs
 - **Page range selection** - Extract specific sections
@@ -54,6 +55,40 @@ python pdf_to_markdown.py casebook.pdf --pages 1-50 -o chapter1.md
 # Convert multiple ranges
 python pdf_to_markdown.py casebook.pdf --pages 1-10,25-35 -o sections.md
 ```
+
+### Page Number Markers (for AI/RAG)
+
+Add page number markers to track original PDF page numbers - essential for citations and RAG systems:
+
+```bash
+# Single file with page markers
+python pdf_to_markdown.py casebook.pdf --page-markers -o casebook.md
+
+# Batch conversion with page markers
+python pdf_to_markdown.py ./casebooks/ --batch --page-markers
+
+# Page range with original numbering preserved
+python pdf_to_markdown.py casebook.pdf --pages 45-67 --page-markers -o chapter3.md
+# Output shows: <!-- Page 45 -->, <!-- Page 46 -->, etc.
+```
+
+**Output format:**
+```markdown
+<!-- Page 1 -->
+
+[Content from page 1...]
+
+<!-- Page 2 -->
+
+[Content from page 2...]
+```
+
+**Benefits for AI/RAG:**
+- ✓ Enables accurate citation of source page numbers
+- ✓ Perfect for chunking documents by page
+- ✓ HTML comments are invisible when rendered but readable by LLMs
+- ✓ Maintains legal citation accuracy
+- ✓ Compatible with all RAG frameworks
 
 ### Extract Images
 
