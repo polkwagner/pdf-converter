@@ -171,7 +171,9 @@ def convert_pdf_to_markdown(
     report: bool = True,
     page_markers: bool = True,
     logger: logging.Logger = None,
-    quiet: bool = False
+    quiet: bool = False,
+    converter: Optional['DocumentConverter'] = None,
+    pdf_info: Optional[Dict] = None
 ) -> Dict:
     """
     Convert a PDF file to markdown format using Docling.
@@ -184,6 +186,9 @@ def convert_pdf_to_markdown(
         ocr: Whether to use OCR for scanned documents (default: False)
         page_markers: Whether to add page number markers to output (default: True)
         quiet: Suppress visual output (default: False)
+        converter: Optional pre-initialized DocumentConverter (for batch efficiency)
+        pdf_info: Optional pre-computed PDF info dict with keys: page_count, first_page,
+                  last_page, blank_pages, file_size (for batch efficiency)
 
     Returns:
         Dict: Conversion report with status and statistics
@@ -202,33 +207,38 @@ def convert_pdf_to_markdown(
         output_dir.mkdir(exist_ok=True)
         output_path = output_dir / Path(pdf_path).with_suffix('.md').name
 
-    # Get file info for display
-    file_size = os.path.getsize(pdf_path)
+    # Get file info - use pre-computed if available (batch mode), otherwise compute
+    if pdf_info:
+        file_size = pdf_info.get('file_size', os.path.getsize(pdf_path))
+        page_count_preview = pdf_info.get('page_count')
+        first_page_preview = pdf_info.get('first_page')
+        last_page_preview = pdf_info.get('last_page')
+        blank_pages_count = pdf_info.get('blank_pages', 0)
+    else:
+        file_size = os.path.getsize(pdf_path)
+        page_count_preview = None
+        first_page_preview = None
+        last_page_preview = None
+        blank_pages_count = 0
+        try:
+            doc = fitz.open(pdf_path)
+            page_count_preview = len(doc)
 
-    # Get page count and page labels using PyMuPDF (fast)
-    page_count_preview = None
-    first_page_preview = None
-    last_page_preview = None
-    blank_pages_count = 0
-    try:
-        doc = fitz.open(pdf_path)
-        page_count_preview = len(doc)
+            # Check for page labels to get actual page range
+            page_labels = doc.get_page_labels()
+            if page_labels:
+                first_page_preview = get_actual_page_number(0, page_labels)
+                last_page_preview = get_actual_page_number(len(doc) - 1, page_labels)
 
-        # Check for page labels to get actual page range
-        page_labels = doc.get_page_labels()
-        if page_labels:
-            first_page_preview = get_actual_page_number(0, page_labels)
-            last_page_preview = get_actual_page_number(len(doc) - 1, page_labels)
+            # Count blank pages (pages with minimal text)
+            for i in range(len(doc)):
+                page_text = doc[i].get_text().strip()
+                if len(page_text) < 20:  # Consider pages with <20 chars as blank
+                    blank_pages_count += 1
 
-        # Count blank pages (pages with minimal text)
-        for i in range(len(doc)):
-            page_text = doc[i].get_text().strip()
-            if len(page_text) < 20:  # Consider pages with <20 chars as blank
-                blank_pages_count += 1
-
-        doc.close()
-    except:
-        pass
+            doc.close()
+        except:
+            pass
 
     # Log to file
     logger.debug(f"Converting: {pdf_path}")
@@ -244,8 +254,10 @@ def convert_pdf_to_markdown(
         suppress_docling_logging()
 
     try:
-        # Initialize DocumentConverter
-        converter = DocumentConverter()
+        # Use provided converter or create new one
+        # In batch mode, reusing the converter avoids reloading ML models for each file
+        if converter is None:
+            converter = DocumentConverter()
 
         # Phase 1: Convert PDF with Docling
         if use_rich:
@@ -357,6 +369,47 @@ def convert_pdf_to_markdown(
         return error_report
 
 
+def get_pdf_info(pdf_path: str) -> Dict:
+    """
+    Get PDF metadata without full conversion.
+
+    Args:
+        pdf_path: Path to PDF file
+
+    Returns:
+        Dict with page_count, first_page, last_page, blank_pages, file_size
+    """
+    info = {
+        'file_size': os.path.getsize(pdf_path),
+        'page_count': None,
+        'first_page': None,
+        'last_page': None,
+        'blank_pages': 0
+    }
+
+    try:
+        doc = fitz.open(pdf_path)
+        info['page_count'] = len(doc)
+
+        # Check for page labels
+        page_labels = doc.get_page_labels()
+        if page_labels:
+            info['first_page'] = get_actual_page_number(0, page_labels)
+            info['last_page'] = get_actual_page_number(len(doc) - 1, page_labels)
+
+        # Count blank pages
+        for i in range(len(doc)):
+            page_text = doc[i].get_text().strip()
+            if len(page_text) < 20:
+                info['blank_pages'] += 1
+
+        doc.close()
+    except:
+        pass
+
+    return info
+
+
 def batch_convert_directory(
     input_dir: str,
     output_dir: Optional[str] = None,
@@ -367,6 +420,11 @@ def batch_convert_directory(
 ) -> Dict:
     """
     Convert all PDF files in a directory to markdown.
+
+    Optimized for batch processing:
+    - Reuses DocumentConverter across all files (avoids reloading ML models)
+    - Pre-scans PDFs for metadata
+    - Shows rich progress feedback
 
     Args:
         input_dir: Directory containing PDF files
@@ -390,7 +448,7 @@ def batch_convert_directory(
 
     if not pdf_files:
         logger.warning(f"No PDF files found in {input_dir}")
-        return
+        return {'success_count': 0, 'error_count': 0, 'reports': []}
 
     # If no output_dir specified, create 'converted' subfolder in input directory
     if output_dir is None:
@@ -399,9 +457,29 @@ def batch_convert_directory(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Found {len(pdf_files)} PDF file(s) to convert")
-    logger.info(f"Output directory: {output_path}")
-    logger.info("-" * 60)
+    # Check if rich is available for visual feedback
+    use_rich = RICH_AVAILABLE
+
+    if use_rich:
+        suppress_docling_logging()
+        from console import console, print_batch_summary
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
+        from rich.panel import Panel
+        from rich.table import Table
+
+        # Print batch header
+        console.print()
+        console.print(Panel(
+            f"[bold]Directory:[/bold] {input_path}\n[bold]Output:[/bold] {output_path}\n[bold]Files:[/bold] {len(pdf_files)} PDFs",
+            title="[bold blue]Batch Conversion[/bold blue]",
+            border_style="blue",
+            padding=(0, 1),
+        ))
+        console.print()
+    else:
+        logger.info(f"Found {len(pdf_files)} PDF file(s) to convert")
+        logger.info(f"Output directory: {output_path}")
+        logger.info("-" * 60)
 
     success_count = 0
     error_count = 0
@@ -410,75 +488,166 @@ def batch_convert_directory(
     total_pages = 0
     reports = []
 
-    # Convert each PDF
-    for i, pdf_path in enumerate(pdf_files, 1):
-        logger.info(f"\n[{i}/{len(pdf_files)}] Processing: {pdf_path.name}")
+    # Initialize DocumentConverter ONCE for all files (major performance optimization)
+    # This avoids reloading ML models for each file
+    converter = DocumentConverter()
 
-        # Determine output path
-        out_dir = Path(output_dir)
-        # Preserve subdirectory structure if recursive
-        if recursive:
-            rel_path = pdf_path.relative_to(input_path)
-            out_path = out_dir / rel_path.with_suffix('.md')
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-        else:
-            out_path = out_dir / pdf_path.with_suffix('.md').name
+    # Pre-scan all PDFs for metadata (enables better progress estimation)
+    pdf_info_map = {}
+    if use_rich:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Scanning PDFs...[/bold]"),
+            BarColumn(bar_width=40),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Scanning", total=len(pdf_files))
+            for pdf_path in pdf_files:
+                pdf_info_map[str(pdf_path)] = get_pdf_info(str(pdf_path))
+                progress.update(task, advance=1)
+    else:
+        for pdf_path in pdf_files:
+            pdf_info_map[str(pdf_path)] = get_pdf_info(str(pdf_path))
 
-        try:
-            report = convert_pdf_to_markdown(
-                str(pdf_path),
-                str(out_path),
-                extract_images=False,
-                ocr=False,
-                report=False,  # Don't print individual reports in batch mode
-                page_markers=page_markers,
-                logger=logger
-            )
-            reports.append(report)
+    # Calculate total pages for progress estimation
+    total_pages_estimate = sum(
+        info.get('page_count', 0) or 0 for info in pdf_info_map.values()
+    )
 
-            if report['status'] == 'success':
-                success_count += 1
-                total_time += report['conversion_time']
-                total_words += report['statistics']['words']
-                total_pages += report['statistics']['pages']
-                logger.info(f"   ✓ {report['statistics']['pages']} pages, {report['statistics']['words']:,} words, {report['conversion_time']}s")
+    # Convert each PDF with progress tracking
+    if use_rich:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]{task.description}[/bold]"),
+            BarColumn(bar_width=40),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"Converting 0/{len(pdf_files)}...", total=len(pdf_files))
+
+            for i, pdf_path in enumerate(pdf_files, 1):
+                progress.update(task, description=f"Converting {i}/{len(pdf_files)}: {pdf_path.name[:30]}...")
+
+                # Determine output path
+                out_dir = Path(output_dir)
+                if recursive:
+                    rel_path = pdf_path.relative_to(input_path)
+                    out_path = out_dir / rel_path.with_suffix('.md')
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                else:
+                    out_path = out_dir / pdf_path.with_suffix('.md').name
+
+                try:
+                    report = convert_pdf_to_markdown(
+                        str(pdf_path),
+                        str(out_path),
+                        extract_images=False,
+                        ocr=False,
+                        report=False,
+                        page_markers=page_markers,
+                        logger=logger,
+                        quiet=True,  # Suppress individual file output in batch mode
+                        converter=converter,  # Reuse converter
+                        pdf_info=pdf_info_map.get(str(pdf_path))  # Pre-computed info
+                    )
+                    reports.append(report)
+
+                    if report['status'] == 'success':
+                        success_count += 1
+                        total_time += report['conversion_time']
+                        total_words += report['statistics']['words']
+                        total_pages += report['statistics']['pages']
+                    else:
+                        error_count += 1
+
+                except Exception as e:
+                    logger.debug(f"Error converting {pdf_path}: {e}")
+                    error_count += 1
+                    reports.append({
+                        'status': 'error',
+                        'input_file': str(pdf_path),
+                        'error': str(e)
+                    })
+
+                progress.update(task, advance=1)
+
+        # Print batch summary using rich
+        print_batch_summary(success_count, error_count, total_time, total_pages, total_words)
+
+    else:
+        # Non-rich fallback
+        for i, pdf_path in enumerate(pdf_files, 1):
+            logger.info(f"\n[{i}/{len(pdf_files)}] Processing: {pdf_path.name}")
+
+            out_dir = Path(output_dir)
+            if recursive:
+                rel_path = pdf_path.relative_to(input_path)
+                out_path = out_dir / rel_path.with_suffix('.md')
+                out_path.parent.mkdir(parents=True, exist_ok=True)
             else:
+                out_path = out_dir / pdf_path.with_suffix('.md').name
+
+            try:
+                report = convert_pdf_to_markdown(
+                    str(pdf_path),
+                    str(out_path),
+                    extract_images=False,
+                    ocr=False,
+                    report=False,
+                    page_markers=page_markers,
+                    logger=logger,
+                    quiet=True,
+                    converter=converter,
+                    pdf_info=pdf_info_map.get(str(pdf_path))
+                )
+                reports.append(report)
+
+                if report['status'] == 'success':
+                    success_count += 1
+                    total_time += report['conversion_time']
+                    total_words += report['statistics']['words']
+                    total_pages += report['statistics']['pages']
+                    logger.info(f"   OK {report['statistics']['pages']} pages, {report['statistics']['words']:,} words, {report['conversion_time']}s")
+                else:
+                    error_count += 1
+                    logger.error(f"   FAILED: {report.get('error', 'Unknown error')}")
+
+            except Exception as e:
+                logger.error(f"FAILED: {e}")
                 error_count += 1
-                logger.error(f"   ✗ Failed: {report.get('error', 'Unknown error')}")
+                reports.append({
+                    'status': 'error',
+                    'input_file': str(pdf_path),
+                    'error': str(e)
+                })
+                continue
 
-        except Exception as e:
-            logger.error(f"✗ Failed: {e}")
-            error_count += 1
-            reports.append({
-                'status': 'error',
-                'input_file': str(pdf_path),
-                'error': str(e)
-            })
-            continue
+    # Print batch summary (only for non-rich mode, rich mode already printed it)
+    if not use_rich:
+        summary = [
+            "\n" + "=" * 60,
+            "BATCH CONVERSION SUMMARY",
+            "=" * 60,
+            f"Files processed:  {len(pdf_files)}",
+            f"  Successful:     {success_count}",
+            f"  Failed:         {error_count}",
+            f"",
+            f"Totals:",
+            f"  Time:           {total_time:.1f}s",
+            f"  Pages:          {total_pages:,}",
+            f"  Words:          {total_words:,}"
+        ]
 
-    # Print batch summary
-    summary = [
-        "\n" + "=" * 60,
-        "BATCH CONVERSION SUMMARY",
-        "=" * 60,
-        f"Files processed:  {len(pdf_files)}",
-        f"  Successful:     {success_count}",
-        f"  Failed:         {error_count}",
-        f"",
-        f"Totals:",
-        f"  Time:           {total_time:.1f}s",
-        f"  Pages:          {total_pages:,}",
-        f"  Words:          {total_words:,}"
-    ]
+        if success_count > 0:
+            summary.append(f"")
+            summary.append(f"Average:          {total_time/success_count:.1f}s per file")
 
-    if success_count > 0:
-        summary.append(f"")
-        summary.append(f"Average:          {total_time/success_count:.1f}s per file")
+        summary.append("=" * 60)
 
-    summary.append("=" * 60)
-
-    summary_text = '\n'.join(summary)
-    logger.info(summary_text)
+        summary_text = '\n'.join(summary)
+        logger.info(summary_text)
 
     # Save report to JSON if requested
     if save_report:
