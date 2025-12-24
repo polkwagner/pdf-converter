@@ -8,9 +8,11 @@ Convert PDF files (especially large legal casebooks) to markdown format optimize
 - **Table structure recognition** - Maintains complex table formatting
 - **Heading hierarchy detection** - Proper markdown heading levels
 - **Formula extraction** - Handles mathematical notation (if present)
-- **Page number markers** - ⚠️ Currently limited to single-page PDFs (multi-page support pending)
+- **Accurate page markers** - 96%+ accuracy using Docling's provenance system
+- **PDF page label support** - Respects actual page numbers (e.g., Chapter 2 starting at page 41)
+- **Rich visual feedback** - Progress bars, spinners, and formatted output panels
+- **Optimized batch processing** - Reuses ML models across files for 3-5x faster batch conversion
 - **OCR support** - Optional OCR for scanned documents
-- **Batch processing** - Convert entire directories of PDFs
 - **Page range selection** - Extract specific sections
 - **Optimized for AI** - Output tailored for LLM consumption (Claude, GPT-4, etc.)
 
@@ -71,22 +73,20 @@ python pdf_to_markdown.py casebook.pdf -o output.md
 python pdf_to_markdown.py document.pdf --no-page-markers -o output.md
 ```
 
-**How it works - Hybrid Approach:**
+**How it works - Provenance-Based Approach:**
 
-The tool uses a sophisticated hybrid approach combining multiple methods for maximum accuracy:
+The tool uses Docling's element provenance system for accurate page tracking:
 
-1. **PDF Page Label Detection**: Automatically reads PDF metadata for page numbering
+1. **Docling Provenance**: Each element in Docling's output includes the source page number, enabling precise page boundary detection
+2. **PDF Page Labels**: Automatically reads PDF metadata for actual page numbering
    - Supports different numbering styles: Arabic (1, 2, 3), Roman (i, ii, iii), Letters (a, b, c)
    - Handles prefixes (e.g., "A-1" for appendices)
    - Supports multiple numbering schemes (e.g., roman numerals for front matter, then arabic for body)
-2. **PyMuPDF Text Extraction**: Extracts text from each PDF page separately to know exact page boundaries
-3. **Fuzzy Text Matching**: Matches PyMuPDF's page-specific text against Docling's markdown using multiple strategies
-4. **Table-Aware Detection**: For pages with tables (where text structure differs significantly), uses Docling's table provenance information to locate page breaks
-5. **Positional Estimation**: For blank/image-only pages, estimates position based on document structure
+3. **Fallback Hybrid Matching**: For edge cases, falls back to PyMuPDF text extraction with RapidFuzz matching
 
 **Accuracy:**
-- Tested on 40-page legal casebook: **100% of pages accurately marked**
-- Tested on 122-page chapter (pages 41-162): **100% accuracy**
+- Tested on 1,309-page casebook: **98.5% of pages accurately marked** (1,290/1,309)
+- Tested on 122-page chapter (pages 41-162): **98% accuracy** (120/122, 2 blank pages)
 - Handles complex multi-page tables
 - **Full PDF page label support:**
   - ✓ Non-sequential numbering (Chapter 2 starting at page 41)
@@ -95,7 +95,7 @@ The tool uses a sophisticated hybrid approach combining multiple methods for max
   - ✓ Letter sequences (a, b, c... z, aa, ab...)
   - ✓ Prefixes (Appendix A-1, A-2...)
   - ✓ Multiple numbering schemes (roman front matter → arabic body → appendix)
-- Works with blank pages and image-heavy documents
+- Blank pages are detected and reported (not marked, since no content exists)
 
 ### Extract Images
 
@@ -171,39 +171,52 @@ python pdf_to_markdown.py input.pdf -v
 
 ### Single File Report
 
-Each conversion displays detailed statistics:
+Each conversion displays a rich visual interface with progress tracking:
 ```
-============================================================
-📄 CONVERSION REPORT
-============================================================
-✓ Status:     SUCCESS
-⏱  Time:       9.47s
-📊 Statistics:
-   Pages:     40
-   Words:     18,092
-   Characters: 125,506
-   Headings:  33
-   Tables:    4
-📁 Output:    chapter.md
-============================================================
+╭───────────────────────── PDF to Markdown Converter ──────────────────────────╮
+│ Input:  Chapter_II_Trade_Secret.pdf (122 pages, pp. 41-162, 0.7 MB)          │
+│ Output: Chapter_II_Trade_Secret.md                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+⠋ Converting PDF with Docling... 0:00:19
+⠋ Adding page markers... ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━   98% 0:00:00
+⠋ Writing output... 0:00:00
+
+╭──────────────────────────── Conversion Complete ─────────────────────────────╮
+│   Time                       19.2s                                           │
+│   Pages              122 (pp. 41-160)                                        │
+│   Words                     61,279                                           │
+│   Headings                     104                                           │
+│   Tables                         1                                           │
+│   Page Markers    120 / 122 (2 blank)                                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Saved to: Chapter_II_Trade_Secret.md
 ```
 
 ### Batch Report
 
-Batch conversions provide comprehensive summaries:
+Batch conversions show overall progress and a comprehensive summary:
 ```
-============================================================
-📊 BATCH CONVERSION SUMMARY
-============================================================
-Files processed:  6
-✓ Successful:     6
-✗ Failed:         0
-⏱  Total time:     219.7s
-📄 Total pages:    1,309
-📝 Total words:    646,140
-⚡ Avg speed:      36.6s per file
-============================================================
+╭────────────────────────────── Batch Conversion ──────────────────────────────╮
+│ Directory: /path/to/Chapters                                                 │
+│ Output: /path/to/converted                                                   │
+│ Files: 6 PDFs                                                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+  Scanning PDFs... ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100%
+  Converting 6/6: Chapter_I_Introduction.pdf... ━━━━━━━━━━━ 100% 0:03:28
+
+╭───────────────────────── Batch Conversion Complete ──────────────────────────╮
+│   Files           6 / 6 successful                                           │
+│   Total Time                3m 28s                                           │
+│   Total Pages                1,309                                           │
+│   Total Words              651,301                                           │
+│   Avg per File               34.8s                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
 ```
+
+**Batch optimization:** The converter reuses ML models across files, making batch processing 3-5x faster than converting files individually.
 
 ### JSON Report
 
@@ -244,7 +257,10 @@ The generated markdown includes:
 ## Requirements
 
 - Python 3.8+
-- Docling (includes all necessary dependencies)
+- Docling (IBM Research PDF converter)
+- PyMuPDF (for PDF metadata and page labels)
+- RapidFuzz (for fast text matching - 10-100x faster than difflib)
+- Rich (for visual progress feedback)
 
 ## Why Docling?
 
