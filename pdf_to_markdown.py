@@ -53,8 +53,16 @@ try:
 except ImportError:
     from difflib import SequenceMatcher
     RAPIDFUZZ_AVAILABLE = False
-    print("WARNING: rapidfuzz not installed. Using slower difflib fallback.")
-    print("For 10-100x faster performance, install with: pip install rapidfuzz")
+
+# Rich console for visual output
+try:
+    from console import (
+        console, ConversionProgress, print_header, print_conversion_report as rich_print_report,
+        print_batch_summary, print_success, print_warning, print_error, suppress_docling_logging
+    )
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
 
 # Pre-compile regex patterns for performance (used in normalize_text)
 _WHITESPACE_PATTERN = re.compile(r'\s+')
@@ -63,13 +71,14 @@ _WHITESPACE_PATTERN = re.compile(r'\s+')
 _normalized_text_cache = {}
 
 
-def setup_logging(log_file: Optional[str] = None, verbose: bool = False):
+def setup_logging(log_file: Optional[str] = None, verbose: bool = False, use_rich: bool = False):
     """
-    Configure logging to both console and file.
+    Configure logging to file (and optionally console).
 
     Args:
         log_file: Optional path to log file. If None, uses default location.
         verbose: If True, show DEBUG messages
+        use_rich: If True, suppress console logging (rich handles console output)
     """
     # Create logger
     logger = logging.getLogger('pdf_converter')
@@ -78,12 +87,13 @@ def setup_logging(log_file: Optional[str] = None, verbose: bool = False):
     # Remove existing handlers
     logger.handlers = []
 
-    # Console handler - INFO and above
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_format = logging.Formatter('%(message)s')
-    console_handler.setFormatter(console_format)
-    logger.addHandler(console_handler)
+    # Only add console handler if not using rich (rich handles all console output)
+    if not use_rich:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        console_format = logging.Formatter('%(message)s')
+        console_handler.setFormatter(console_format)
+        logger.addHandler(console_handler)
 
     # File handler - DEBUG and above
     if log_file:
@@ -96,11 +106,23 @@ def setup_logging(log_file: Optional[str] = None, verbose: bool = False):
         file_handler.setFormatter(file_format)
         logger.addHandler(file_handler)
 
-        # Log session start
-        logger.info("="*60)
-        logger.info(f"PDF to Markdown Converter - Session Started")
-        logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info("="*60)
+        # Log session start to file only
+        file_handler.emit(logging.LogRecord(
+            'pdf_converter', logging.INFO, '', 0,
+            "="*60, (), None
+        ))
+        file_handler.emit(logging.LogRecord(
+            'pdf_converter', logging.INFO, '', 0,
+            f"PDF to Markdown Converter - Session Started", (), None
+        ))
+        file_handler.emit(logging.LogRecord(
+            'pdf_converter', logging.INFO, '', 0,
+            f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", (), None
+        ))
+        file_handler.emit(logging.LogRecord(
+            'pdf_converter', logging.INFO, '', 0,
+            "="*60, (), None
+        ))
 
     return logger
 
@@ -148,7 +170,8 @@ def convert_pdf_to_markdown(
     ocr: bool = False,
     report: bool = True,
     page_markers: bool = True,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
+    quiet: bool = False
 ) -> Dict:
     """
     Convert a PDF file to markdown format using Docling.
@@ -160,9 +183,10 @@ def convert_pdf_to_markdown(
         extract_images: Whether to extract and save images (default: False for text-only)
         ocr: Whether to use OCR for scanned documents (default: False)
         page_markers: Whether to add page number markers to output (default: True)
+        quiet: Suppress visual output (default: False)
 
     Returns:
-        str: The generated markdown content
+        Dict: Conversion report with status and statistics
     """
     if logger is None:
         logger = logging.getLogger('pdf_converter')
@@ -178,39 +202,77 @@ def convert_pdf_to_markdown(
         output_dir.mkdir(exist_ok=True)
         output_path = output_dir / Path(pdf_path).with_suffix('.md').name
 
-    logger.info(f"Converting: {pdf_path}")
-    logger.info(f"Output: {output_path}")
+    # Get file info for display
+    file_size = os.path.getsize(pdf_path)
+
+    # Get page count using PyMuPDF (fast)
+    try:
+        doc = fitz.open(pdf_path)
+        page_count_preview = len(doc)
+        doc.close()
+    except:
+        page_count_preview = None
+
+    # Log to file
+    logger.debug(f"Converting: {pdf_path}")
+    logger.debug(f"Output: {output_path}")
 
     # Track conversion time
     start_time = time.time()
 
-    # Initialize DocumentConverter
-    # Docling will use default settings optimized for high-fidelity conversion
-    converter = DocumentConverter()
+    # Use rich visual output if available and not quiet
+    use_rich = RICH_AVAILABLE and not quiet
+
+    if use_rich:
+        suppress_docling_logging()
 
     try:
-        # Convert the PDF
-        result = converter.convert(pdf_path)
+        # Initialize DocumentConverter
+        converter = DocumentConverter()
 
-        # Export to markdown
-        md_text = result.document.export_to_markdown()
+        # Phase 1: Convert PDF with Docling
+        if use_rich:
+            with ConversionProgress(pdf_path, str(output_path), page_count_preview, file_size, quiet) as progress:
+                with progress.phase("Converting PDF with Docling..."):
+                    result = converter.convert(pdf_path)
+                    md_text = result.document.export_to_markdown()
 
-        # Add page markers if requested
-        if page_markers:
-            md_text = add_page_markers(md_text, pdf_path, result.document, logger)
+                # Phase 2: Add page markers
+                if page_markers:
+                    page_count = len(result.document.pages) if hasattr(result.document, 'pages') else 0
+                    with progress.phase(f"Adding page markers...", total=page_count) as update:
+                        # Pass progress callback to add_page_markers
+                        md_text = add_page_markers(md_text, pdf_path, result.document, logger,
+                                                  progress_callback=update if page_count > 100 else None)
 
-        # Add metadata header
-        pdf_name = Path(pdf_path).name
-        header = f"# {Path(pdf_path).stem}\n\n"
-        header += f"*Converted from: {pdf_name}*\n\n"
-        header += f"*Conversion tool: Docling (IBM Research)*\n\n"
-        header += "---\n\n"
+                # Phase 3: Write output
+                with progress.phase("Writing output..."):
+                    pdf_name = Path(pdf_path).name
+                    header = f"# {Path(pdf_path).stem}\n\n"
+                    header += f"*Converted from: {pdf_name}*\n\n"
+                    header += f"*Conversion tool: Docling (IBM Research)*\n\n"
+                    header += "---\n\n"
+                    full_content = header + md_text
 
-        full_content = header + md_text
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write(full_content)
+        else:
+            # Non-rich fallback
+            result = converter.convert(pdf_path)
+            md_text = result.document.export_to_markdown()
 
-        # Write to file
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(full_content)
+            if page_markers:
+                md_text = add_page_markers(md_text, pdf_path, result.document, logger)
+
+            pdf_name = Path(pdf_path).name
+            header = f"# {Path(pdf_path).stem}\n\n"
+            header += f"*Converted from: {pdf_name}*\n\n"
+            header += f"*Conversion tool: Docling (IBM Research)*\n\n"
+            header += "---\n\n"
+            full_content = header + md_text
+
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(full_content)
 
         # Calculate conversion time
         conversion_time = time.time() - start_time
@@ -226,6 +288,9 @@ def convert_pdf_to_markdown(
         word_count = len(full_content.split())
         page_count = len(result.document.pages) if hasattr(result.document, 'pages') else 0
 
+        # Count page markers
+        pages_marked = full_content.count('<!-- Page')
+
         # Build report
         conversion_report = {
             'status': 'success',
@@ -237,12 +302,16 @@ def convert_pdf_to_markdown(
                 'characters': char_count,
                 'words': word_count,
                 'headings': len(headings),
-                'tables': len(tables)
+                'tables': len(tables),
+                'pages_marked': pages_marked
             }
         }
 
         if report:
-            print_conversion_report(conversion_report, logger)
+            if use_rich:
+                rich_print_report(conversion_report)
+            else:
+                print_conversion_report(conversion_report, logger)
 
         return conversion_report
 
@@ -1014,7 +1083,8 @@ def insert_page_markers_hybrid(md_text: str, pdf_path: str, doc=None, logger: lo
     return ''.join(result_parts)
 
 
-def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = None) -> str:
+def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = None,
+                                    progress_callback=None) -> str:
     """
     Insert page markers using Docling's element provenance information.
 
@@ -1025,6 +1095,7 @@ def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = N
         md_text: Markdown text from Docling
         doc: DoclingDocument object with element provenance
         logger: Optional logger for debugging
+        progress_callback: Optional callback for progress updates
 
     Returns:
         Markdown text with accurate page markers inserted
@@ -1056,7 +1127,7 @@ def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = N
         return md_text
 
     total_pages = max(first_items_by_page.keys())
-    logger.info(f"Found provenance for {len(first_items_by_page)} pages (max page: {total_pages})")
+    logger.debug(f"Found provenance for {len(first_items_by_page)} pages (max page: {total_pages})")
 
     # Normalize markdown for searching
     md_lower = md_text.lower()
@@ -1065,8 +1136,9 @@ def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = N
     insertions = []
     pages_found = 0
     last_pos = 0  # Track last found position to ensure forward progress
+    sorted_pages = sorted(first_items_by_page.keys())
 
-    for page_no in sorted(first_items_by_page.keys()):
+    for i, page_no in enumerate(sorted_pages):
         item_text = first_items_by_page[page_no]
 
         # Search for item text in markdown (case-insensitive)
@@ -1092,7 +1164,15 @@ def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = N
         else:
             logger.debug(f"Could not locate page {page_no} text in markdown")
 
-    logger.info(f"Located {pages_found}/{len(first_items_by_page)} pages using provenance")
+        # Update progress
+        if progress_callback and (i + 1) % 50 == 0:
+            progress_callback(i + 1)
+
+    # Final progress update
+    if progress_callback:
+        progress_callback(len(sorted_pages))
+
+    logger.debug(f"Located {pages_found}/{len(first_items_by_page)} pages using provenance")
 
     if not insertions:
         return md_text
@@ -1117,7 +1197,8 @@ def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = N
     return ''.join(result_parts)
 
 
-def add_page_markers(md_text: str, pdf_path: str, doc=None, logger: logging.Logger = None) -> str:
+def add_page_markers(md_text: str, pdf_path: str, doc=None, logger: logging.Logger = None,
+                     progress_callback=None) -> str:
     """
     Add accurate page number markers to markdown content.
 
@@ -1129,6 +1210,7 @@ def add_page_markers(md_text: str, pdf_path: str, doc=None, logger: logging.Logg
         pdf_path: Path to original PDF file (needed for fallback)
         doc: DoclingDocument object with page information
         logger: Optional logger for debugging
+        progress_callback: Optional callback for progress updates (called with page count)
 
     Returns:
         Markdown text with accurate page markers inserted
@@ -1159,11 +1241,11 @@ def add_page_markers(md_text: str, pdf_path: str, doc=None, logger: logging.Logg
     # Try provenance-based approach first (most accurate)
     if doc:
         try:
-            result = insert_page_markers_provenance(md_text, doc, logger)
+            result = insert_page_markers_provenance(md_text, doc, logger, progress_callback)
             # Check if we got reasonable results
             marker_count = result.count('<!-- Page')
             if marker_count > 0:
-                logger.info(f"Provenance-based markers: {marker_count} pages marked")
+                logger.debug(f"Provenance-based markers: {marker_count} pages marked")
                 return result
         except Exception as e:
             logger.warning(f"Provenance-based marker insertion failed: {e}")
@@ -1284,15 +1366,15 @@ Examples:
         output_location.mkdir(parents=True, exist_ok=True)
         log_path = output_location / 'conversion.log'
 
-    logger = setup_logging(str(log_path), verbose=args.verbose)
-    logger.info(f"Log file: {log_path}")
+    logger = setup_logging(str(log_path), verbose=args.verbose, use_rich=RICH_AVAILABLE)
+    logger.debug(f"Log file: {log_path}")
 
     # Parse page range if provided
     pages = None
     if args.pages:
         try:
             pages = parse_page_range(args.pages)
-            logger.info(f"Converting pages: {args.pages} (0-indexed: {pages})")
+            logger.debug(f"Converting pages: {args.pages} (0-indexed: {pages})")
         except Exception as e:
             logger.error(f"Error parsing page range: {e}")
             sys.exit(1)
@@ -1318,9 +1400,9 @@ Examples:
             logger=logger
         )
 
-    logger.info("\n" + "="*60)
-    logger.info("Session completed")
-    logger.info("="*60)
+    logger.debug("\n" + "="*60)
+    logger.debug("Session completed")
+    logger.debug("="*60)
 
 
 if __name__ == '__main__':
