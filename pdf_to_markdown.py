@@ -47,6 +47,15 @@ except ImportError:
     print("Install with: pip install PyMuPDF")
     sys.exit(1)
 
+try:
+    from rapidfuzz import fuzz
+    RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    from difflib import SequenceMatcher
+    RAPIDFUZZ_AVAILABLE = False
+    print("WARNING: rapidfuzz not installed. Using slower difflib fallback.")
+    print("For 10-100x faster performance, install with: pip install rapidfuzz")
+
 # Pre-compile regex patterns for performance (used in normalize_text)
 _WHITESPACE_PATTERN = re.compile(r'\s+')
 
@@ -581,11 +590,15 @@ def normalize_text(text: str) -> str:
 
 
 def find_text_position(md_text: str, search_text: str, start_pos: int = 0, min_words: int = 10,
-                       md_normalized: Optional[str] = None) -> int:
+                       md_normalized: Optional[str] = None, estimated_pos: Optional[int] = None,
+                       search_window_chars: int = 200000) -> int:
     """
-    Find the position of search_text in md_text using optimized two-phase fuzzy matching.
+    Find the position of search_text in md_text using optimized fuzzy matching.
 
-    Performance: 5-10x faster than original single-pass approach for large documents.
+    Performance optimizations:
+    - Uses RapidFuzz (10-100x faster than difflib if available)
+    - Smart position estimation to limit search window
+    - Early termination on excellent matches
 
     Args:
         md_text: The markdown text to search in
@@ -593,6 +606,8 @@ def find_text_position(md_text: str, search_text: str, start_pos: int = 0, min_w
         start_pos: Position to start searching from
         min_words: Minimum number of words to use as signature
         md_normalized: Pre-normalized markdown (optional, for performance)
+        estimated_pos: Estimated position of match (enables windowed search)
+        search_window_chars: Size of search window around estimated position
 
     Returns:
         Position where search_text was found, or -1 if not found
@@ -604,15 +619,24 @@ def find_text_position(md_text: str, search_text: str, start_pos: int = 0, min_w
 
     # Use pre-normalized text if provided, otherwise normalize on demand
     if md_normalized is None:
-        md_normalized = normalize_text(md_text[start_pos:])
+        md_normalized = normalize_text(md_text)
+
+    # Smart windowing: if we have an estimated position, search only nearby
+    if estimated_pos is not None and estimated_pos > start_pos:
+        # Search within window around estimated position
+        window_start = max(start_pos, estimated_pos - search_window_chars // 2)
+        window_end = min(len(md_normalized), estimated_pos + search_window_chars // 2)
+        search_region = md_normalized[window_start:window_end]
+        search_offset = window_start
     else:
-        # Use slice of pre-normalized text
-        md_normalized = md_normalized[start_pos:]
+        # No estimate - search from start_pos onward
+        search_region = md_normalized[start_pos:]
+        search_offset = start_pos
 
     # Try exact match first (C-optimized string search)
-    exact_pos = md_normalized.find(search_normalized)
+    exact_pos = search_region.find(search_normalized)
     if exact_pos != -1:
-        return start_pos + exact_pos
+        return search_offset + exact_pos
 
     # Prepare signature for fuzzy matching
     words = search_normalized.split()
@@ -630,28 +654,42 @@ def find_text_position(md_text: str, search_text: str, start_pos: int = 0, min_w
 
     signature = ' '.join(words[:signature_words])
     window_size = len(signature)
-    threshold = 0.65
+    threshold = 65  # RapidFuzz uses 0-100 scale
 
-    # Single-pass fuzzy search with early termination
-    # (Two-phase is slower for sequential page matching where matches are usually found early)
+    # Fuzzy search with early termination
     best_ratio = 0.0
     best_pos = -1
     step_size = max(5, window_size // 20)
 
-    for i in range(0, max(1, len(md_normalized) - window_size + 1), step_size):
-        window = md_normalized[i:i + window_size]
-        ratio = SequenceMatcher(None, signature, window).ratio()
+    if RAPIDFUZZ_AVAILABLE:
+        # Use RapidFuzz (10-100x faster than difflib)
+        for i in range(0, max(1, len(search_region) - window_size + 1), step_size):
+            window = search_region[i:i + window_size]
+            ratio = fuzz.ratio(signature, window)
 
-        if ratio > best_ratio:
-            best_ratio = ratio
-            best_pos = i
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_pos = i
 
-            # Early termination if excellent match found
-            if ratio > 0.9:
-                break
+                # Early termination if excellent match found
+                if ratio > 90:
+                    break
+    else:
+        # Fallback to difflib
+        for i in range(0, max(1, len(search_region) - window_size + 1), step_size):
+            window = search_region[i:i + window_size]
+            ratio = SequenceMatcher(None, signature, window).ratio() * 100
+
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_pos = i
+
+                # Early termination if excellent match found
+                if ratio > 90:
+                    break
 
     if best_ratio >= threshold:
-        return start_pos + best_pos
+        return search_offset + best_pos
 
     return -1
 
@@ -741,18 +779,31 @@ def find_table_in_markdown(md_text: str, table_idx: int, doc, start_pos: int = 0
     window_size = len(signature)
     threshold = 0.7
 
-    # Single-pass fuzzy search
+    # Fuzzy search with RapidFuzz or difflib fallback
     best_ratio = 0.0
     best_pos = -1
 
-    for i in range(0, max(1, len(md_normalized) - window_size + 1), 20):
-        window = md_normalized[i:i + window_size]
-        ratio = SequenceMatcher(None, signature, window).ratio()
-        if ratio > best_ratio:
-            best_ratio = ratio
-            best_pos = i
-            if ratio > 0.85:
-                break
+    if RAPIDFUZZ_AVAILABLE:
+        for i in range(0, max(1, len(md_normalized) - window_size + 1), 20):
+            window = md_normalized[i:i + window_size]
+            ratio = fuzz.ratio(signature, window)
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_pos = i
+                if ratio > 85:
+                    break
+        # RapidFuzz uses 0-100 scale
+        threshold = 70
+    else:
+        for i in range(0, max(1, len(md_normalized) - window_size + 1), 20):
+            window = md_normalized[i:i + window_size]
+            ratio = SequenceMatcher(None, signature, window).ratio() * 100
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_pos = i
+                if ratio > 85:
+                    break
+        threshold = 70
 
     if best_ratio >= threshold:
         return start_pos + best_pos
@@ -809,10 +860,27 @@ def insert_page_markers_hybrid(md_text: str, pdf_path: str, doc=None, logger: lo
 
     current_search_pos = 0
     pages_found = 0
+    blank_pages_skipped = []
+
+    # Calculate average chars per page for position estimation
+    total_md_chars = len(marked_text)
+    total_pages = len(pages)
+    avg_chars_per_page = total_md_chars // total_pages if total_pages > 0 else 0
+
+    # Progress tracking for large documents
+    show_progress = total_pages > 100
+    if show_progress:
+        logger.info(f"Processing {total_pages} pages with position estimation...")
+        progress_interval = max(10, total_pages // 20)  # Show progress every 5%
 
     for i, page_data in enumerate(pages):
         page_num = page_data['page_number']
         page_text = page_data['text']
+
+        # Progress indicator for large documents
+        if show_progress and i > 0 and i % progress_interval == 0:
+            percent = (i / total_pages) * 100
+            logger.info(f"  Progress: {i}/{total_pages} pages ({percent:.0f}%) - {pages_found} matched")
 
         if i == 0:
             # First page - marker goes at the beginning
@@ -820,20 +888,25 @@ def insert_page_markers_hybrid(md_text: str, pdf_path: str, doc=None, logger: lo
             pages_found += 1
             continue
 
+        # Estimate where this page should be (for smart windowing)
+        estimated_pos = current_search_pos + avg_chars_per_page
+
         # For subsequent pages, try multiple strategies to find the page boundary
         pos = -1
 
-        # Strategy 1: Try first 500 chars
+        # Strategy 1: Try first 500 chars with position estimation
         signature_length = min(500, len(page_text))
         if signature_length > 0:
             signature = page_text[:signature_length]
-            pos = find_text_position(marked_text, signature, current_search_pos, min_words=5, md_normalized=md_normalized)
+            pos = find_text_position(marked_text, signature, current_search_pos, min_words=5,
+                                    md_normalized=md_normalized, estimated_pos=estimated_pos)
 
         # Strategy 2: If that failed, try first 200 chars with lower threshold
         if pos == -1 and len(page_text) >= 100:
             signature_length = min(200, len(page_text))
             signature = page_text[:signature_length]
-            pos = find_text_position(marked_text, signature, current_search_pos, min_words=3, md_normalized=md_normalized)
+            pos = find_text_position(marked_text, signature, current_search_pos, min_words=3,
+                                    md_normalized=md_normalized, estimated_pos=estimated_pos)
 
         # Strategy 3: Try middle portion of page (skip headers/footers that might be missing)
         if pos == -1 and len(page_text) >= 200:
@@ -841,7 +914,8 @@ def insert_page_markers_hybrid(md_text: str, pdf_path: str, doc=None, logger: lo
             start_offset = len(page_text) // 10
             end_offset = min(start_offset + 300, len(page_text) * 6 // 10)
             signature = page_text[start_offset:end_offset]
-            pos = find_text_position(marked_text, signature, current_search_pos, min_words=3, md_normalized=md_normalized)
+            pos = find_text_position(marked_text, signature, current_search_pos, min_words=3,
+                                    md_normalized=md_normalized, estimated_pos=estimated_pos)
 
         # Strategy 4: Extract distinctive words/phrases and search for them
         # This helps with tables where formatting is very different
@@ -852,30 +926,37 @@ def insert_page_markers_hybrid(md_text: str, pdf_path: str, doc=None, logger: lo
                 # Create a minimal signature from scattered distinctive words
                 distinctive_words = [words[i] for i in range(0, min(50, len(words)), 5)]
                 signature = ' '.join(distinctive_words[:10])  # Use 10 words max
-                pos = find_text_position(marked_text, signature, current_search_pos, min_words=2, md_normalized=md_normalized)
+                pos = find_text_position(marked_text, signature, current_search_pos, min_words=2,
+                                        md_normalized=md_normalized, estimated_pos=estimated_pos)
 
-        # Strategy 5: For blank pages (0 chars), estimate position based on document progress
+        # Strategy 5: For blank pages, skip them entirely
+        # If a PDF page is blank and we can't find it, it means Docling didn't include it
+        # in the markdown output. Don't fabricate a position - just skip it.
         if pos == -1 and len(page_text) == 0:
-            # Estimate position: current_pos + (remaining_text / remaining_pages)
-            remaining_md = len(marked_text) - current_search_pos
-            remaining_pages = len(pages) - i
-            if remaining_pages > 0:
-                estimated_page_length = remaining_md // remaining_pages
-                # Position the marker approximately one page forward
-                pos = current_search_pos + estimated_page_length
-                logger.debug(f"Page {page_num} is blank - using positional estimate at {pos}")
+            logger.debug(f"Page {page_num} is blank - skipping (no content in markdown)")
+            blank_pages_skipped.append(page_num)
+            # Don't add to failed_pages, and don't insert a marker
+            continue
 
         if pos != -1:
             # Found the page boundary - record insertion point
             insertions.append((pos, f"\n\n<!-- Page {page_num} -->\n\n"))
             current_search_pos = pos + len(signature if 'signature' in locals() and signature else 100)
             pages_found += 1
+
+            # Update average chars per page estimate based on actual findings
+            if pages_found > 1:
+                avg_chars_per_page = current_search_pos // pages_found
         else:
             # Couldn't find this page's text - track for table-based recovery
             failed_pages.append((i, page_num, page_text))
             logger.debug(f"Could not locate page {page_num} in markdown (page has {len(page_text)} chars)")
 
     logger.debug(f"Successfully matched {pages_found}/{len(pages)} pages")
+
+    if blank_pages_skipped:
+        logger.info(f"Skipped {len(blank_pages_skipped)} blank pages: {blank_pages_skipped[:20]}" +
+                   (f" ... and {len(blank_pages_skipped)-20} more" if len(blank_pages_skipped) > 20 else ""))
 
     # Second pass: Try to recover failed pages using table information
     if failed_pages and table_pages and doc:
@@ -933,17 +1014,119 @@ def insert_page_markers_hybrid(md_text: str, pdf_path: str, doc=None, logger: lo
     return ''.join(result_parts)
 
 
-def add_page_markers(md_text: str, pdf_path: str, doc=None, logger: logging.Logger = None) -> str:
+def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = None) -> str:
     """
-    Add accurate page number markers to markdown content using hybrid approach.
+    Insert page markers using Docling's element provenance information.
 
-    Uses PyMuPDF to extract page-by-page text, then matches that text against
-    Docling's markdown output to find accurate page boundaries. This ensures
-    100% accuracy for legal citations.
+    This approach uses Docling's internal page tracking for each document element,
+    which is far more accurate than trying to match PDF text against markdown.
 
     Args:
         md_text: Markdown text from Docling
-        pdf_path: Path to original PDF file (needed for PyMuPDF extraction)
+        doc: DoclingDocument object with element provenance
+        logger: Optional logger for debugging
+
+    Returns:
+        Markdown text with accurate page markers inserted
+    """
+    if logger is None:
+        logger = logging.getLogger('pdf_converter')
+
+    if not doc:
+        logger.warning("No Docling document provided for provenance-based markers")
+        return md_text
+
+    # Build mapping of page -> first text item on that page
+    first_items_by_page = {}
+
+    for item, level in doc.iterate_items():
+        if hasattr(item, 'prov') and item.prov:
+            for prov in item.prov:
+                if hasattr(prov, 'page_no'):
+                    page_no = prov.page_no
+                    if page_no not in first_items_by_page:
+                        # Get text from item
+                        text = getattr(item, 'text', None)
+                        if text and len(text.strip()) > 10:  # Meaningful text
+                            first_items_by_page[page_no] = text.strip()
+                    break
+
+    if not first_items_by_page:
+        logger.warning("No page provenance found in document")
+        return md_text
+
+    total_pages = max(first_items_by_page.keys())
+    logger.info(f"Found provenance for {len(first_items_by_page)} pages (max page: {total_pages})")
+
+    # Normalize markdown for searching
+    md_lower = md_text.lower()
+
+    # Find positions for each page
+    insertions = []
+    pages_found = 0
+    last_pos = 0  # Track last found position to ensure forward progress
+
+    for page_no in sorted(first_items_by_page.keys()):
+        item_text = first_items_by_page[page_no]
+
+        # Search for item text in markdown (case-insensitive)
+        search_text = item_text[:80].lower()  # Use first 80 chars
+
+        # Search from last position forward
+        pos = md_lower.find(search_text, last_pos)
+
+        if pos == -1:
+            # Try shorter match
+            search_text = item_text[:40].lower()
+            pos = md_lower.find(search_text, last_pos)
+
+        if pos == -1:
+            # Try even shorter match
+            search_text = item_text[:20].lower()
+            pos = md_lower.find(search_text, last_pos)
+
+        if pos != -1:
+            insertions.append((pos, page_no))
+            last_pos = pos + len(search_text)
+            pages_found += 1
+        else:
+            logger.debug(f"Could not locate page {page_no} text in markdown")
+
+    logger.info(f"Located {pages_found}/{len(first_items_by_page)} pages using provenance")
+
+    if not insertions:
+        return md_text
+
+    # Sort by position
+    insertions.sort(key=lambda x: x[0])
+
+    # Build result with markers
+    result_parts = []
+    last_insert_pos = 0
+
+    for pos, page_no in insertions:
+        # Add text before this marker
+        result_parts.append(md_text[last_insert_pos:pos])
+        # Add marker
+        result_parts.append(f"\n\n<!-- Page {page_no} -->\n\n")
+        last_insert_pos = pos
+
+    # Add remaining text
+    result_parts.append(md_text[last_insert_pos:])
+
+    return ''.join(result_parts)
+
+
+def add_page_markers(md_text: str, pdf_path: str, doc=None, logger: logging.Logger = None) -> str:
+    """
+    Add accurate page number markers to markdown content.
+
+    Uses Docling's element provenance for accurate page tracking. Falls back to
+    PyMuPDF text matching if provenance is unavailable.
+
+    Args:
+        md_text: Markdown text from Docling
+        pdf_path: Path to original PDF file (needed for fallback)
         doc: DoclingDocument object with page information
         logger: Optional logger for debugging
 
@@ -973,12 +1156,24 @@ def add_page_markers(md_text: str, pdf_path: str, doc=None, logger: logging.Logg
         md_text = f"<!-- Page {first_page} -->\n\n{md_text}"
         return md_text
 
-    # Use hybrid PyMuPDF + text matching approach for accurate page markers
+    # Try provenance-based approach first (most accurate)
+    if doc:
+        try:
+            result = insert_page_markers_provenance(md_text, doc, logger)
+            # Check if we got reasonable results
+            marker_count = result.count('<!-- Page')
+            if marker_count > 0:
+                logger.info(f"Provenance-based markers: {marker_count} pages marked")
+                return result
+        except Exception as e:
+            logger.warning(f"Provenance-based marker insertion failed: {e}")
+
+    # Fall back to PyMuPDF + text matching approach
     try:
         return insert_page_markers_hybrid(md_text, pdf_path, doc, logger)
     except Exception as e:
-        logger.warning(f"Page marker insertion failed: {e}")
-        # If hybrid approach fails, fall back to simple single-page marker
+        logger.warning(f"Hybrid page marker insertion failed: {e}")
+        # If both approaches fail, fall back to simple single-page marker
         if doc and hasattr(doc, 'pages') and len(doc.pages) == 1:
             return f"<!-- Page 1 -->\n\n{md_text}"
 

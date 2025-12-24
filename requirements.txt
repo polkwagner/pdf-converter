@@ -1,2 +1,3 @@
 docling>=2.0.0
 PyMuPDF>=1.23.0  # For verification
+rapidfuzz>=3.0.0  # 10-100x faster fuzzy matching than difflib
