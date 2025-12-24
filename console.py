@@ -28,7 +28,9 @@ from rich.text import Text
 console = Console()
 
 
-def print_header(input_path: str, output_path: str, page_count: Optional[int] = None, file_size: Optional[int] = None):
+def print_header(input_path: str, output_path: str, page_count: Optional[int] = None,
+                 file_size: Optional[int] = None, first_page: Optional[int] = None,
+                 last_page: Optional[int] = None):
     """Print the conversion header with file info."""
     input_name = Path(input_path).name
     output_name = Path(output_path).name
@@ -36,7 +38,11 @@ def print_header(input_path: str, output_path: str, page_count: Optional[int] = 
     # Build info line
     info_parts = []
     if page_count:
-        info_parts.append(f"{page_count:,} pages")
+        if first_page is not None and last_page is not None:
+            # Show page range for non-sequential numbering
+            info_parts.append(f"{page_count:,} pages, pp. {first_page}-{last_page}")
+        else:
+            info_parts.append(f"{page_count:,} pages")
     if file_size:
         size_mb = file_size / (1024 * 1024)
         info_parts.append(f"{size_mb:.1f} MB")
@@ -129,13 +135,31 @@ def print_conversion_report(report: Dict, show_file_path: bool = True):
             time_str = f"{seconds:.1f}s"
 
         table.add_row("Time", time_str)
-        table.add_row("Pages", f"{stats['pages']:,}")
+
+        # Show page range if PDF has non-sequential numbering
+        first_page = stats.get('first_page', 1)
+        last_page = stats.get('last_page', stats['pages'])
+        if first_page != 1 or last_page != stats['pages']:
+            # Non-sequential: show "122 (pp. 41-162)"
+            table.add_row("Pages", f"{stats['pages']:,} (pp. {first_page}-{last_page})")
+        else:
+            table.add_row("Pages", f"{stats['pages']:,}")
+
         table.add_row("Words", f"{stats['words']:,}")
         table.add_row("Headings", f"{stats['headings']:,}")
         table.add_row("Tables", f"{stats['tables']:,}")
 
         if 'pages_marked' in stats:
-            table.add_row("Page Markers", f"{stats['pages_marked']:,} / {stats['pages']:,}")
+            markers_str = f"{stats['pages_marked']:,} / {stats['pages']:,}"
+            # Add note about blank pages if some pages weren't marked
+            blank_pages = stats.get('blank_pages', 0)
+            unmarked = stats['pages'] - stats['pages_marked']
+            if unmarked > 0 and blank_pages > 0:
+                if blank_pages >= unmarked:
+                    markers_str += f" ({unmarked} blank)"
+                else:
+                    markers_str += f" ({blank_pages} blank, {unmarked - blank_pages} other)"
+            table.add_row("Page Markers", markers_str)
 
         # Build panel content
         panel = Panel(
@@ -220,11 +244,14 @@ class ConversionProgress:
 
     def __init__(self, input_path: str, output_path: str,
                  page_count: Optional[int] = None, file_size: Optional[int] = None,
+                 first_page: Optional[int] = None, last_page: Optional[int] = None,
                  quiet: bool = False):
         self.input_path = input_path
         self.output_path = output_path
         self.page_count = page_count
         self.file_size = file_size
+        self.first_page = first_page
+        self.last_page = last_page
         self.quiet = quiet
         self.start_time = None
         self._progress = None
@@ -232,7 +259,8 @@ class ConversionProgress:
 
     def __enter__(self):
         if not self.quiet:
-            print_header(self.input_path, self.output_path, self.page_count, self.file_size)
+            print_header(self.input_path, self.output_path, self.page_count, self.file_size,
+                        self.first_page, self.last_page)
         self.start_time = time.time()
         return self
 

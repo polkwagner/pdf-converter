@@ -205,13 +205,30 @@ def convert_pdf_to_markdown(
     # Get file info for display
     file_size = os.path.getsize(pdf_path)
 
-    # Get page count using PyMuPDF (fast)
+    # Get page count and page labels using PyMuPDF (fast)
+    page_count_preview = None
+    first_page_preview = None
+    last_page_preview = None
+    blank_pages_count = 0
     try:
         doc = fitz.open(pdf_path)
         page_count_preview = len(doc)
+
+        # Check for page labels to get actual page range
+        page_labels = doc.get_page_labels()
+        if page_labels:
+            first_page_preview = get_actual_page_number(0, page_labels)
+            last_page_preview = get_actual_page_number(len(doc) - 1, page_labels)
+
+        # Count blank pages (pages with minimal text)
+        for i in range(len(doc)):
+            page_text = doc[i].get_text().strip()
+            if len(page_text) < 20:  # Consider pages with <20 chars as blank
+                blank_pages_count += 1
+
         doc.close()
     except:
-        page_count_preview = None
+        pass
 
     # Log to file
     logger.debug(f"Converting: {pdf_path}")
@@ -232,7 +249,8 @@ def convert_pdf_to_markdown(
 
         # Phase 1: Convert PDF with Docling
         if use_rich:
-            with ConversionProgress(pdf_path, str(output_path), page_count_preview, file_size, quiet) as progress:
+            with ConversionProgress(pdf_path, str(output_path), page_count_preview, file_size,
+                                   first_page_preview, last_page_preview, quiet) as progress:
                 with progress.phase("Converting PDF with Docling..."):
                     result = converter.convert(pdf_path)
                     md_text = result.document.export_to_markdown()
@@ -288,8 +306,18 @@ def convert_pdf_to_markdown(
         word_count = len(full_content.split())
         page_count = len(result.document.pages) if hasattr(result.document, 'pages') else 0
 
-        # Count page markers
+        # Count page markers and extract page range
         pages_marked = full_content.count('<!-- Page')
+
+        # Extract first and last page numbers from markers
+        page_marker_matches = re.findall(r'<!-- Page (\d+) -->', full_content)
+        if page_marker_matches:
+            page_numbers = [int(p) for p in page_marker_matches]
+            first_page = min(page_numbers)
+            last_page = max(page_numbers)
+        else:
+            first_page = 1
+            last_page = page_count
 
         # Build report
         conversion_report = {
@@ -299,6 +327,9 @@ def convert_pdf_to_markdown(
             'conversion_time': round(conversion_time, 2),
             'statistics': {
                 'pages': page_count,
+                'first_page': first_page,
+                'last_page': last_page,
+                'blank_pages': blank_pages_count,
                 'characters': char_count,
                 'words': word_count,
                 'headings': len(headings),
@@ -1083,7 +1114,8 @@ def insert_page_markers_hybrid(md_text: str, pdf_path: str, doc=None, logger: lo
     return ''.join(result_parts)
 
 
-def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = None,
+def insert_page_markers_provenance(md_text: str, doc, pdf_path: str = None,
+                                    logger: logging.Logger = None,
                                     progress_callback=None) -> str:
     """
     Insert page markers using Docling's element provenance information.
@@ -1094,6 +1126,7 @@ def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = N
     Args:
         md_text: Markdown text from Docling
         doc: DoclingDocument object with element provenance
+        pdf_path: Path to original PDF (for page label support)
         logger: Optional logger for debugging
         progress_callback: Optional callback for progress updates
 
@@ -1106,6 +1139,18 @@ def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = N
     if not doc:
         logger.warning("No Docling document provided for provenance-based markers")
         return md_text
+
+    # Get PDF page labels if available (for non-sequential page numbering)
+    page_labels = None
+    if pdf_path:
+        try:
+            pdf_doc = fitz.open(pdf_path)
+            page_labels = pdf_doc.get_page_labels()
+            if page_labels:
+                logger.debug(f"PDF has page labels: {page_labels}")
+            pdf_doc.close()
+        except Exception as e:
+            logger.debug(f"Could not read PDF page labels: {e}")
 
     # Build mapping of page -> first text item on that page
     first_items_by_page = {}
@@ -1187,8 +1232,17 @@ def insert_page_markers_provenance(md_text: str, doc, logger: logging.Logger = N
     for pos, page_no in insertions:
         # Add text before this marker
         result_parts.append(md_text[last_insert_pos:pos])
-        # Add marker
-        result_parts.append(f"\n\n<!-- Page {page_no} -->\n\n")
+
+        # Convert Docling's 1-indexed page to actual page label
+        # Docling uses 1-indexed pages, PDF page labels use 0-indexed
+        pdf_page_idx = page_no - 1  # Convert to 0-indexed for page label lookup
+        if page_labels:
+            actual_page = get_actual_page_number(pdf_page_idx, page_labels)
+        else:
+            actual_page = page_no
+
+        # Add marker with actual page number
+        result_parts.append(f"\n\n<!-- Page {actual_page} -->\n\n")
         last_insert_pos = pos
 
     # Add remaining text
@@ -1241,7 +1295,7 @@ def add_page_markers(md_text: str, pdf_path: str, doc=None, logger: logging.Logg
     # Try provenance-based approach first (most accurate)
     if doc:
         try:
-            result = insert_page_markers_provenance(md_text, doc, logger, progress_callback)
+            result = insert_page_markers_provenance(md_text, doc, pdf_path, logger, progress_callback)
             # Check if we got reasonable results
             marker_count = result.count('<!-- Page')
             if marker_count > 0:
