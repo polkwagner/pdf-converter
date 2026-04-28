@@ -45,6 +45,12 @@ There is no linter config and no build step. `requirements.txt` pins minimum ver
 # Disable page markers
 ./venv/bin/python convert.py doc.pdf --no-page-markers -o out.md
 
+# HTML conversion (auto-detected by extension)
+./venv/bin/python convert.py article.html -o article.md
+
+# HTML with noise stripping
+./venv/bin/python convert.py article.html --strip-html-noise -o article.md
+
 # Run the test suite
 ./venv/bin/python -m pytest tests/
 
@@ -71,6 +77,9 @@ package under `materials/`. The current state (post-stage-1) is:
   ConversionOptions, ConversionResult), `output.py` (path helpers and
   `sanitize_heading_text`), `verify.py` (cheap-check primitives).
 - `materials/formats/pdf.py` — all PDF logic (formerly in `pdf_to_markdown.py`).
+- `materials/formats/html.py` — HTML converter. Pure Docling pipeline plus
+  optional bs4 noise-stripping (`--strip-html-noise`). First consumer of
+  `materials/core/output.py::sanitize_heading_text` and `materials/core/verify.py`.
 - `pdf_to_markdown.py` — deprecation shim only; removed in stage 5.
 - `console.py` — Rich UX helpers (unchanged).
 - `verify_conversion.py`, `verify_page_markers.py` — verification scripts
@@ -87,6 +96,18 @@ Orchestrates four stages per PDF:
 2. **Docling conversion** — `DocumentConverter().convert()` produces a `DoclingDocument` with element-level provenance (every paragraph/table/heading knows which page it came from). The document is exported to markdown via `document.export_to_markdown()`.
 3. **Page-marker insertion** — see below; this is the part most likely to be fragile.
 4. **Output write + report** — markdown saved, stats logged, Rich panel printed.
+
+### HTML conversion pipeline (`materials/formats/html.py`)
+
+HTML conversion is simpler than PDF because Docling handles the markup natively. The pipeline:
+
+1. **Read the file** as UTF-8 (with latin-1 fallback for legacy pages).
+2. **Optional noise strip** — if `--strip-html-noise` is set, beautifulsoup4 removes `<script>`, `<style>`, `<nav>`, `<footer>`, `<aside>`, and elements whose class matches `sidebar|advert|cookie|consent`. Without the flag, the raw HTML is passed through.
+3. **Docling convert** — the cleaned (or raw) HTML is written to a temp file and passed to `DocumentConverter()`. Docling produces markdown.
+4. **Section markers** — a regex walks the markdown for `^#` and `^##` lines and inserts numbered `<!-- Section K: heading-text -->` markers before each one. H3+ are not numbered (sectioning happens at H1/H2 only). `core/output.py::sanitize_heading_text` is applied to the heading text.
+5. **Cheap verifier** — output non-empty + word retention ratio ≥60% (HTML loses lots of tag overhead, hence the lower minimum).
+
+bs4 is an **optional** dependency. The converter only imports it if `--strip-html-noise` is set; without the flag, bs4 doesn't need to be installed.
 
 ### Page-marker insertion (the architecturally non-obvious part)
 
