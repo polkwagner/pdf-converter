@@ -19,9 +19,13 @@ from materials.formats.pdf import (
     parse_page_range,
     setup_logging,
 )
+from materials.formats.html import HTMLConverter
 
 # Extension → converter instance. Stage 2-4 register more entries here.
-REGISTRY = {ext: PDFConverter() for ext in PDFConverter.extensions}
+REGISTRY = {}
+for converter in (PDFConverter(), HTMLConverter()):
+    for ext in converter.extensions:
+        REGISTRY[ext] = converter
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -49,6 +53,12 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="OCR for scanned PDFs (slow; PDF only)")
     parser.add_argument("--no-page-markers", dest="page_markers", action="store_false",
                         help="Disable position markers (enabled by default)")
+    parser.add_argument(
+        "--strip-html-noise",
+        action="store_true",
+        help="Strip <script>, <style>, <nav>, <footer>, <aside> from HTML before "
+             "conversion. Requires beautifulsoup4. (HTML only.)",
+    )
     parser.add_argument("--save-report", action="store_true",
                         help="Save detailed conversion report JSON (batch mode)")
     parser.add_argument("--log-file", help="Path to log file")
@@ -78,6 +88,7 @@ def _dispatch_single(input_path: str, args: argparse.Namespace) -> int:
         extract_images=args.images,
         quiet=False,
         verbose=args.verbose,
+        strip_html_noise=args.strip_html_noise,
     )
     result = converter.convert(input_path, options)
     return 0 if result.status == "success" else 1
