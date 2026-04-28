@@ -2,8 +2,8 @@
 """convert.py — unified materials-md CLI.
 
 Auto-detects format from the input file's extension and dispatches to the
-appropriate converter. Stage 1 supports PDF only; subsequent stages add
-DOCX, PPTX, and HTML.
+appropriate converter. Stage 2 supports PDF and HTML; subsequent stages add
+DOCX and PPTX.
 """
 from __future__ import annotations
 
@@ -42,7 +42,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("input", help="Input file or directory")
     parser.add_argument("-o", "--output", help="Output markdown file or directory")
     parser.add_argument("--batch", action="store_true",
-                        help="Batch convert all supported files in a directory")
+                        help="Batch convert PDF files in a directory "
+                             "(HTML/DOCX/PPTX batch support coming in stage 5)")
     parser.add_argument("--recursive", "-r", action="store_true",
                         help="Recurse into subdirectories (with --batch)")
     parser.add_argument("--pages",

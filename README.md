@@ -115,10 +115,10 @@ python pdf_to_markdown.py scanned_casebook.pdf --ocr
 
 ```bash
 # Convert a single HTML article (auto-detected by extension)
-python pdf_to_markdown.py article.html -o article.md
+python convert.py article.html -o article.md
 
 # Strip navigation, footers, ads, and cookie banners before conversion
-python pdf_to_markdown.py article.html --strip-html-noise -o article.md
+python convert.py article.html --strip-html-noise -o article.md
 ```
 
 HTML output uses **section markers** instead of page markers: `<!-- Section 1: Title -->`, `<!-- Section 2: First heading -->`, etc. Markers are inserted at H1 and H2 boundaries; H3 and deeper headings appear as ordinary `### ...` markdown without their own markers.

@@ -107,8 +107,6 @@ class HTMLConverter(BaseConverter):
         except UnicodeDecodeError:
             html = src.read_text(encoding="latin-1")
 
-        source_words = _count_html_words(html)
-
         if options.strip_html_noise:
             try:
                 html = _strip_html_noise(html)
@@ -116,19 +114,28 @@ class HTMLConverter(BaseConverter):
                 logger.warning(str(exc))
                 return ConversionResult(status="error", error=str(exc))
 
-        # Docling wants a file path; write the (possibly cleaned) HTML to a temp file.
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".html", delete=False, encoding="utf-8"
-        ) as tmp:
-            tmp.write(html)
-            tmp_path = tmp.name
+        # Source-word baseline for the verifier is the HTML Docling actually sees,
+        # so we measure AFTER stripping. Otherwise --strip-html-noise spuriously
+        # depresses the retention ratio because the stripped nav/footer counted
+        # toward source but never made it to output.
+        source_words = _count_html_words(html)
 
+        # Docling wants a file path; write the (possibly cleaned) HTML to a temp file.
+        # Track the temp path independently so cleanup runs even if write() raises.
+        tmp_path: Optional[str] = None
         try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".html", delete=False, encoding="utf-8"
+            ) as tmp:
+                tmp_path = tmp.name
+                tmp.write(html)
+
             converter = DocumentConverter()
             docling_result = converter.convert(tmp_path)
             markdown = docling_result.document.export_to_markdown()
         finally:
-            Path(tmp_path).unlink(missing_ok=True)
+            if tmp_path:
+                Path(tmp_path).unlink(missing_ok=True)
 
         if options.page_markers:
             markdown = _insert_section_markers(markdown)
