@@ -2,3 +2,5 @@ docling>=2.0.0
 PyMuPDF>=1.23.0  # For PDF metadata and page labels
 rapidfuzz>=3.0.0  # 10-100x faster fuzzy matching than difflib
 rich>=13.0.0  # Visual progress bars and formatted output
+pytest>=8.0.0  # Test runner (Stage 1+)
+reportlab>=4.0.0  # Used only by tests/fixtures/build/build_pdf.py
