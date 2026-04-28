@@ -6,7 +6,6 @@ shim is replaced; pdf_to_markdown.py becomes a deprecation shim (Task 12).
 from __future__ import annotations
 
 # === Stdlib ===
-import argparse
 import json
 import logging
 import os
@@ -49,7 +48,7 @@ from materials.core.base import BaseConverter, ConversionOptions, ConversionResu
 
 
 # ============================================================================
-# === BEGIN: bodies moved verbatim from pdf_to_markdown.py (do NOT modify) ===
+# === BEGIN: bodies moved verbatim from the legacy snapshot (do NOT modify) ==
 # ============================================================================
 # The 17 functions below are pasted unchanged from
 # tests/fixtures/legacy_pdf_to_markdown.py lines 74-1488, in this exact order:

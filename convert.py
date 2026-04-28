@@ -13,7 +13,12 @@ import sys
 from pathlib import Path
 
 from materials.core.base import ConversionOptions
-from materials.formats.pdf import PDFConverter, parse_page_range, setup_logging
+from materials.formats.pdf import (
+    PDFConverter,
+    RICH_AVAILABLE,
+    parse_page_range,
+    setup_logging,
+)
 
 # Extension → converter instance. Stage 2-4 register more entries here.
 REGISTRY = {ext: PDFConverter() for ext in PDFConverter.extensions}
@@ -111,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         out_loc.mkdir(parents=True, exist_ok=True)
         log_path = out_loc / "conversion.log"
 
-    setup_logging(str(log_path), verbose=args.verbose, use_rich=True)
+    setup_logging(str(log_path), verbose=args.verbose, use_rich=RICH_AVAILABLE)
 
     if args.batch or os.path.isdir(args.input):
         return _dispatch_batch(args.input, args)
