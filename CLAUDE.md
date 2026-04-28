@@ -1,0 +1,130 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+A PDF→markdown converter built around **Docling** (IBM Research), with custom logic for accurate page-number markers, batch optimization, and Rich-based terminal UX. Primary use case: converting legal casebooks and academic PDFs to LLM-ingestible markdown. See `README.md` for user-facing docs.
+
+## Environment
+
+The project runs in a venv at `./venv/`. There is no `pip install -e .` — scripts are invoked directly:
+
+```bash
+./venv/bin/python convert.py ...              # main converter (PDF in stage 1; DOCX/PPTX/HTML in later stages)
+./venv/bin/python pdf_to_markdown.py ...      # DEPRECATED — forwards to convert.py; removed in stage 5
+./venv/bin/python verify_conversion.py ...    # output verifier (consolidated into verify_cli.py in stage 5)
+./venv/bin/python verify_page_markers.py ...  # page-marker accuracy check (consolidated in stage 5)
+./venv/bin/python -m pytest tests/            # test suite (new in stage 1)
+```
+
+If you create the venv from scratch:
+
+```bash
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+```
+
+There is no linter config and no build step. `requirements.txt` pins minimum versions only (`docling>=2.0.0`, etc.) — the actual versions in the venv are 2.65.0 / 1.26.7 / 3.14.3 / 14.2.0 as of last update. A pytest test suite was added in stage 1 (see the Tests subsection under Architecture).
+
+## Common commands
+
+```bash
+# Single file
+./venv/bin/python pdf_to_markdown.py input.pdf -o output.md
+
+# Batch (reuses the Docling ML model across files — 3-5x faster)
+./venv/bin/python pdf_to_markdown.py ./pdfs/ --batch
+
+# Page range
+./venv/bin/python pdf_to_markdown.py book.pdf --pages 1-50 -o ch1.md
+
+# OCR for scanned PDFs (slow)
+./venv/bin/python pdf_to_markdown.py scan.pdf --ocr
+
+# Disable page markers
+./venv/bin/python pdf_to_markdown.py doc.pdf --no-page-markers -o out.md
+
+# Verify a single conversion (compares pdf↔md word/char/page counts)
+./venv/bin/python verify_conversion.py source.pdf output.md
+
+# Audit page-marker accuracy on a sample
+./venv/bin/python verify_page_markers.py source.pdf output.md
+```
+
+Defaults worth knowing:
+- Page markers are **on** by default. Output looks like `<!-- Page N -->` interleaved at page boundaries.
+- Batch mode writes to `<input_dir>/converted/` if `-o` isn't given.
+- Single-file mode writes a sibling `converted/` subfolder for the log file even when `-o` points elsewhere.
+- The `conversion.log` file accumulates session entries (DEBUG with `-v`).
+
+## Architecture
+
+The codebase is being migrated from a single-file PDF converter into a multi-format
+package under `materials/`. The current state (post-stage-1) is:
+
+- `convert.py` — CLI entry point. Auto-detects format from extension and dispatches.
+- `materials/core/` — shared types and utilities. `base.py` (BaseConverter ABC,
+  ConversionOptions, ConversionResult), `output.py` (path helpers and
+  `sanitize_heading_text`), `verify.py` (cheap-check primitives).
+- `materials/formats/pdf.py` — all PDF logic (formerly in `pdf_to_markdown.py`).
+- `pdf_to_markdown.py` — deprecation shim only; removed in stage 5.
+- `console.py` — Rich UX helpers (unchanged).
+- `verify_conversion.py`, `verify_page_markers.py` — verification scripts
+  (consolidated into `verify_cli.py` in stage 5).
+- `tests/` — pytest test suite. `tests/fixtures/build/` holds scripted fixture
+  builders; `tests/fixtures/legacy_pdf_to_markdown.py` is a frozen snapshot
+  used by the migration test.
+
+### PDF conversion pipeline (`materials/formats/pdf.py`)
+
+Orchestrates four stages per PDF:
+
+1. **Metadata pre-scan** (`get_pdf_info`) — PyMuPDF reads page count, page labels, and PDF-level metadata. Page labels matter: a casebook may start at page 41 (Chapter II), use Roman numerals for front matter, or have multiple numbering schemes. `get_actual_page_number` translates a 0-indexed page index back to whatever the PDF declares.
+2. **Docling conversion** — `DocumentConverter().convert()` produces a `DoclingDocument` with element-level provenance (every paragraph/table/heading knows which page it came from). The document is exported to markdown via `document.export_to_markdown()`.
+3. **Page-marker insertion** — see below; this is the part most likely to be fragile.
+4. **Output write + report** — markdown saved, stats logged, Rich panel printed.
+
+### Page-marker insertion (the architecturally non-obvious part)
+
+`materials.formats.pdf.add_page_markers` is the entry point. It tries three strategies in order, falling back if the prior one returns a poor result:
+
+1. **Internal Docling markers.** Some Docling versions emit `#_#_DOCLING_DOC_PAGE_BREAK_<from>_<to>_#_#` tokens directly in the markdown stream. If present, these are converted to `<!-- Page N -->` comments verbatim — by far the most accurate path.
+2. **Provenance-based** (`insert_page_markers_provenance`). Walks the Docling element tree, uses each element's `prov[0].page_no` to determine its source page, then locates that element's text in the markdown stream to insert a marker before it. Most common path in practice.
+3. **Hybrid PyMuPDF + RapidFuzz fallback** (`insert_page_markers_hybrid`). For elements where provenance is missing or ambiguous, this extracts per-page text directly with PyMuPDF and finds a fuzzy match against the markdown body. Slower but rescues edge cases.
+
+If all three fail, the converter returns markdown without markers rather than with wrong markers — this is intentional ("better no marker than a misplaced one"). Single-page documents get a special case: a `<!-- Page 1 -->` prepended unconditionally.
+
+Common breakage points: changes to Docling's markdown serialization (whitespace, heading levels, table formatting) that desync the text-position search; PDFs whose page labels parse oddly (the script handles Roman, letters, prefixed forms — see `to_roman` / `to_letters`).
+
+### Batch mode
+
+`batch_convert_directory` initializes a single `DocumentConverter` instance and reuses it across all PDFs. This is the only meaningful performance optimization in the codebase, and it's why batch mode runs 3–5× faster than sequential single-file invocations. Don't refactor batch mode to instantiate per file.
+
+### `console.py` — Rich UX layer
+
+All Rich-dependent output (panels, progress bars, spinners, batch summary tables) is isolated here. The main script imports it lazily under a `RICH_AVAILABLE` flag and degrades to plain `logger.info` calls if Rich is missing. `suppress_docling_logging()` silences Docling's stdout chatter so the Rich progress bars aren't shredded.
+
+### `verify_conversion.py` and `verify_page_markers.py`
+
+Two separate verifiers with different scopes:
+
+- `verify_conversion.py` — coarse sanity check. Compares PDF and markdown by page count, word/char retention ratio, table presence, image-heavy page detection. Has a `--batch` mode that walks a directory of `.md` outputs against a parallel directory of `.pdf` sources. Pass/warn/fail thresholds are encoded in `verify_conversion`.
+- `verify_page_markers.py` — fine-grained page-marker correctness audit. Samples markers, extracts surrounding text, fuzzy-matches against the corresponding PyMuPDF page, reports a hit rate. Use this when you suspect provenance is misfiring on a specific corpus.
+
+### Tests
+
+`pytest tests/` runs the suite. The load-bearing test is
+`tests/test_pdf.py::test_migration_byte_identical`, which guarantees that
+`convert.py` produces output byte-equal to the frozen legacy snapshot at
+`tests/fixtures/legacy_pdf_to_markdown.py`. Every refactor that touches PDF
+logic must keep this test green.
+
+Fixtures are scripted — every binary fixture has a builder under
+`tests/fixtures/build/` so they can be regenerated deterministically.
+
+## Repo state notes
+
+- `.gitignore` excludes `*.md` except `README.md` and `CLAUDE.md`, so any conversion output written to the repo root is gitignored by default — handy for ad-hoc testing without polluting `git status`.
+- `conversion.log` accumulates across runs and is gitignored. Delete or rotate it if it grows unwieldy.
+- `__pycache__/` is regenerated automatically; safe to delete any time.
