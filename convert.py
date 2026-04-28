@@ -18,10 +18,11 @@ from materials.core.logging import RICH_AVAILABLE, setup_logging
 from materials.formats.docx import DOCXConverter
 from materials.formats.html import HTMLConverter
 from materials.formats.pdf import PDFConverter, parse_page_range
+from materials.formats.pptx import PPTXConverter
 
 # Extension → converter instance. Stage 2-4 register more entries here.
 REGISTRY = {}
-for converter in (PDFConverter(), HTMLConverter(), DOCXConverter()):
+for converter in (PDFConverter(), HTMLConverter(), DOCXConverter(), PPTXConverter()):
     for ext in converter.extensions:
         REGISTRY[ext] = converter
 
@@ -35,6 +36,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "  %(prog)s chapter1.pdf -o chapter1.md\n"
             "  %(prog)s memo.docx -o memo.md\n"
             "  %(prog)s memo.docx --full -o memo-with-comments.md\n"
+            "  %(prog)s deck.pptx -o deck.md\n"
+            "  %(prog)s deck.pptx --notes-only -o lecture-transcript.md\n"
             "  %(prog)s article.html -o article.md\n"
             "  %(prog)s ./casebooks/ --batch\n"
             "  %(prog)s casebook.pdf --pages 1-50 -o excerpt.md\n"
@@ -80,6 +83,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="DOCX: extract embedded images to <output>_files/. "
              "Without this flag, images become <!-- image --> placeholders.",
     )
+    parser.add_argument(
+        "--notes-only",
+        action="store_true",
+        help="PPTX: emit a clean lecture transcript — slide numbers + speaker "
+             "notes text only, dropping bullet content. Slides without notes "
+             "are skipped.",
+    )
     parser.add_argument("--save-report", action="store_true",
                         help="Save detailed conversion report JSON (batch mode)")
     parser.add_argument("--continue-on-error", dest="continue_on_error",
@@ -122,6 +132,7 @@ def _dispatch_single(input_path: str, args: argparse.Namespace) -> int:
         full=args.full,
         show_revisions=args.show_revisions,
         keep_images=args.keep_images,
+        notes_only=args.notes_only,
     )
     result = converter.convert(input_path, options)
     if result.status != "success":
