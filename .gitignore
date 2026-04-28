@@ -26,10 +26,11 @@ htmlcov/
 *.swo
 *~
 
-# Output files
+# Output files (ignore conversion outputs at repo root, but keep docs and READMEs)
 *.md
 !README.md
 !CLAUDE.md
+!docs/**/*.md
 *.pdf
 
 # Logs
