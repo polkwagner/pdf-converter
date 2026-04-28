@@ -1,6 +1,6 @@
 # PDF to Markdown Converter
 
-Convert PDF files (especially large legal casebooks) to markdown format optimized for AI tools using **Docling** - IBM Research's state-of-the-art PDF conversion tool.
+Convert PDF and HTML files to markdown format optimized for AI tools, using **Docling** - IBM Research's document understanding library. Future stages add DOCX and PPTX support.
 
 ## Features
 
@@ -14,6 +14,7 @@ Convert PDF files (especially large legal casebooks) to markdown format optimize
 - **Optimized batch processing** - Reuses ML models across files for 3-5x faster batch conversion
 - **OCR support** - Optional OCR for scanned documents
 - **Page range selection** - Extract specific sections
+- **HTML support** - Convert articles, web pages, and HTML exports to clean markdown with numbered section markers. Optional `--strip-html-noise` removes navigation, footers, and ad/cookie clutter via beautifulsoup4.
 - **Optimized for AI** - Output tailored for LLM consumption (Claude, GPT-4, etc.)
 
 ## Installation
@@ -109,6 +110,18 @@ python pdf_to_markdown.py input.pdf --images
 # Enable OCR for image-based PDFs (slower but necessary for scanned docs)
 python pdf_to_markdown.py scanned_casebook.pdf --ocr
 ```
+
+### HTML Conversion
+
+```bash
+# Convert a single HTML article (auto-detected by extension)
+python pdf_to_markdown.py article.html -o article.md
+
+# Strip navigation, footers, ads, and cookie banners before conversion
+python pdf_to_markdown.py article.html --strip-html-noise -o article.md
+```
+
+HTML output uses **section markers** instead of page markers: `<!-- Section 1: Title -->`, `<!-- Section 2: First heading -->`, etc. Markers are inserted at H1 and H2 boundaries; H3 and deeper headings appear as ordinary `### ...` markdown without their own markers.
 
 ## Verification
 
