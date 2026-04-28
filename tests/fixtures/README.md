@@ -9,5 +9,6 @@ deterministically. To rebuild a fixture, run its builder from the repo root:
 |---|---|---|
 | `sample.pdf` | 3-page PDF with Roman-numeral page labels (front matter) and a table | `build/build_pdf.py` |
 | `sample_article.html` | Article with H1/H2/H3, a `<nav>` element, and headings containing `--` and backticks (exercises §5.2 escaping) | `build/build_html.py` |
+| `sample_with_comments.docx` | Memo with H1/H2 headings, one footnote, one Word comment anchored to "contested claim", one tracked-changes ins/del pair | `build/build_docx.py` |
 
-Future stages add `sample_with_comments.docx` and `sample_with_notes.pptx`.
+Future stages add `sample_with_notes.pptx`.
