@@ -107,9 +107,9 @@ tests/
   test_cli.py                    # exercises convert.py dispatch + flags
 ```
 
-**Rex Major 2 (premature `core/markers.py`):** there is **no** `core/markers.py` in this layout. Each format owns its own marker insertion because the strategies differ fundamentally (PDF: 3-strategy fuzzy fallback; PPTX: walk slides via `iterate_items` with FURNITURE layer; DOCX/HTML: heading walk). When two formats independently grow code that genuinely overlaps, that's the moment to extract — not before.
+**No `core/markers.py`** in this layout. Each format owns its own marker insertion because the strategies differ fundamentally (PDF: 3-strategy fuzzy fallback; PPTX: walk slides via `iterate_items` with FURNITURE layer; DOCX/HTML: heading walk). The only shared piece is `core/output.py::sanitize_heading_text`, used by DOCX and HTML for marker text. When two formats independently grow code that genuinely overlaps beyond that, that's the moment to extract — not before.
 
-### 5.2 Marker uniqueness (Rex Major 3 fix)
+### 5.2 Marker uniqueness and heading escaping
 
 Section markers for DOCX and HTML are **numbered** to ensure intra-document uniqueness:
 
@@ -122,7 +122,19 @@ Section markers for DOCX and HTML are **numbered** to ensure intra-document uniq
 
 Numbering is sequential by document order, restarting at 1 per document. The heading text is included for human readability. Citation form: "Section 3 of memo" maps unambiguously to `<!-- Section 3: ... -->`.
 
-For PDF and PPTX, page/slide numbers are already unique within a document so no change needed.
+**Heading escaping rule (mandatory).** Heading text within a marker is sanitized before insertion to avoid breaking HTML comment syntax and to keep markers compact:
+
+1. Collapse any run of two-or-more `-` characters to a single `-` (prevents `-->` and `--` from terminating or destabilizing the comment).
+2. Strip backticks (` ` ` `) — they confuse downstream renderers when they straddle a comment boundary.
+3. Strip newlines and tabs; collapse internal whitespace to single spaces.
+4. Truncate to 80 characters (excluding the `<!-- Section K: ` and ` -->` framing). Append `…` if truncated.
+5. If the result is empty after sanitization, use `(untitled)`.
+
+Example: a DOCX heading `Why we use --no-foo (and \`--strict\`)` becomes `<!-- Section 4: Why we use -no-foo (and -strict) -->`.
+
+Implementation lives in `core/output.py` as `sanitize_heading_text(text: str) -> str`; both `formats/docx.py` and `formats/html.py` call it.
+
+For PDF and PPTX, page/slide numbers are already unique within a document so no escaping is needed there.
 
 ### 5.3 Format-specific notes
 
@@ -133,17 +145,19 @@ For PDF and PPTX, page/slide numbers are already unique within a document so no 
 - Footnotes via `document.part.related_parts` (look for the `footnotes` part) → emitted as `[^N]` markdown footnotes with a `## Footnotes` section appended.
 - Revision elements (`w:ins`, `w:del`) walked via lxml on `document.element.body`.
 
-Default behavior strips comments and accepts revisions but **always preserves footnotes**. `--full` adds the comments appendix; `--show-revisions` renders revisions inline. Section markers inserted by walking Docling's element tree for `section_header` items and assigning sequential numbers (per §5.2).
+**Comment-extraction scope (stage 3):** only top-level Word comments from `comments.xml` are captured. Modern Word also writes `commentsExtended.xml` (threaded replies and resolved/unresolved state), `commentsExtensible.xml`, and `commentsIds.xml`. python-docx's high-level API doesn't expose these uniformly, so `--full` output emits a top-level comment but its replies are silently dropped. This is a **known limitation** — documented in `convert.py --help` and the README — to be addressed in a follow-up after stage 5. If a memo has heavy reviewer threading, fall back to the original `.docx` for review.
+
+Default behavior strips comments and accepts revisions but **always preserves footnotes**. `--full` adds the comments appendix; `--show-revisions` renders revisions inline. Section markers inserted by walking Docling's element tree for `section_header` items and assigning sequential numbers (per §5.2). **DOCX with no headings:** single fallback marker `<!-- Section 1: (untitled) -->` at top of document, mirroring the HTML rule in §5.4.
 
 **PPTX (`formats/pptx.py`):** Single Docling pass with `included_content_layers={ContentLayer.BODY, ContentLayer.FURNITURE}`. Slide markers inserted by walking the document tree per slide group; speaker-note text identified by `content_layer == FURNITURE` within a slide group and re-emitted with `<!-- Speaker notes -->` prefix. `--notes-only` flag walks slides and emits only `<!-- Slide N -->\n<notes text>` for each slide that has notes.
 
 **HTML (`formats/html.py`):** Docling does the conversion. With `--strip-html-noise`, beautifulsoup4 strips `<script>`, `<style>`, `<nav>`, `<footer>`, `<aside>`, and elements with `class` matching `/sidebar|advert|cookie|consent/i` before handing the cleaned HTML to Docling. Section markers inserted on H1/H2 headings only; H3+ are not numbered (they live inside their parent section). Documented edge cases below.
 
-### 5.4 HTML edge cases (Rex Minor 5 fix)
+### 5.4 HTML edge cases
 
 Documented as known limitations in `convert.py --help` and README:
 
-- **JS-rendered pages:** bs4 sees only the static HTML. Pages that hydrate content client-side will produce minimal output. Recommendation: render to static HTML upstream (e.g., browser "Save Page As → Web Page, Complete") before converting.
+- **JS-rendered pages:** static HTML only — pages that hydrate content client-side will produce minimal output regardless of `--strip-html-noise`. Both Docling and bs4 see only the bytes on disk; neither runs a browser. Recommendation: render to static HTML upstream (e.g., browser "Save Page As → Web Page, Complete") before converting.
 - **Multiple `<h1>` tags:** each gets its own `<!-- Section K: ... -->` marker; numbering continues across them.
 - **`<h3>` with no `<h2>` parent:** ignored for marker purposes (sectioning happens at H1/H2 only). The H3 still appears in the markdown as `### ...`.
 - **No headings at all:** single section marker `<!-- Section 1: (untitled) -->` at top of document.
@@ -175,7 +189,7 @@ Run synchronously after conversion, fast (<100ms typical), block writes only on 
 
 When `--verify` runs, a `<output>.verify.json` sidecar is written next to the markdown with structured results: `{format, checks_run, results: [{name, status, detail}], duration_ms}`. This enables `find converted/ -name '*.verify.json' | xargs jq '.results[] | select(.status=="FAIL")'` audits across a corpus.
 
-### 6.4 Failure semantics (Rex Major 4 fix)
+### 6.4 Failure semantics
 
 | Layer | Single-file mode | Batch mode |
 |---|---|---|
@@ -186,7 +200,7 @@ When `--verify` runs, a `<output>.verify.json` sidecar is written next to the ma
 
 `--continue-on-error` only applies in batch mode (single-file always exits non-zero on failure). `--strict` flag escalates retention/count drift to a hard fail (no markdown written), useful for automated pipelines that prefer strict semantics.
 
-## 7. Test infrastructure (Rex Major 5 fix)
+## 7. Test infrastructure
 
 ### 7.1 Decision
 
@@ -194,19 +208,19 @@ Tests are added in stage 1 alongside the PDF refactor. No CI yet (matches curren
 
 ### 7.2 Fixtures
 
-- Hand-crafted minimal fixtures committed in `tests/fixtures/` — under 100KB each.
-- 3 fixtures per format:
-  - `tests/fixtures/sample.pdf` (3 pages, includes a Roman-numeral-prefixed page label, one table)
-  - `tests/fixtures/sample_with_comments.docx` (built once via python-docx + manual comment insertion in Word, then committed; ~30KB)
-  - `tests/fixtures/sample_with_notes.pptx` (3 slides, 2 with speaker notes)
-  - `tests/fixtures/sample_article.html` (simple article with H1/H2/H3, one nav element to test stripping)
-- A `tests/fixtures/README.md` documents what each fixture exercises and how to regenerate.
+- Minimal fixtures committed in `tests/fixtures/` — under 100KB each. Every fixture is **scripted**, not hand-clicked, so regeneration is reproducible.
+- One fixture per format, each built by a committed script in `tests/fixtures/build/`:
+  - `tests/fixtures/sample.pdf` (3 pages, Roman-numeral-prefixed page label, one table) — `build/build_pdf.py` uses ReportLab.
+  - `tests/fixtures/sample_with_comments.docx` (one paragraph, one footnote, one Word comment, ~30KB) — `build/build_docx.py` uses python-docx for the prose and lxml to inject `<w:commentRangeStart>`/`<w:commentRangeEnd>` and a `comments.xml` part directly into the .docx archive (python-docx does not insert comments natively).
+  - `tests/fixtures/sample_with_notes.pptx` (3 slides, 2 with speaker notes) — `build/build_pptx.py` uses python-pptx.
+  - `tests/fixtures/sample_article.html` (article with H1/H2/H3, one `<nav>` to test stripping, one heading containing `--` to exercise §5.2 escaping) — `build/build_html.py` writes static HTML.
+- A `tests/fixtures/README.md` documents what each fixture exercises and how to regenerate (`python tests/fixtures/build/build_<format>.py`). Both the fixture and its builder are committed.
 
 ### 7.3 Test contract
 
 A passing test means: (a) conversion runs without exception; (b) the cheap verifier reports PASS; (c) marker count matches the fixture's expected count; (d) for DOCX/PPTX, key auxiliary content (comments, notes) is present iff its flag is set.
 
-## 8. Incremental delivery (Rex Major 1 fix)
+## 8. Incremental delivery
 
 Five stages. Each stage is independently shippable and useful.
 
@@ -216,9 +230,10 @@ Five stages. Each stage is independently shippable and useful.
 
 - Create `convert.py`, `materials/core/{base,output,verify}.py`, `materials/formats/pdf.py`.
 - Move PDF logic from `pdf_to_markdown.py` into `formats/pdf.py` and `core/`.
-- `pdf_to_markdown.py` becomes a 5-line deprecation shim: prints `[DEPRECATED] use convert.py — pdf_to_markdown.py will be removed in stage 5` to stderr, then forwards `sys.argv` to `convert.main()`.
-- Add `tests/test_pdf.py` and PDF fixture; cheap verifier ported.
-- Migration test: run a known PDF through old and new code paths, assert byte-identical output.
+- `pdf_to_markdown.py` becomes a 5-line deprecation shim: prints `[DEPRECATED] use convert.py — pdf_to_markdown.py will be removed in stage 5` to stderr, then forwards `sys.argv` to `convert.main()` (the shim sets `sys.argv[0] = "convert.py"` so argparse error messages reference the new tool).
+- Add `tests/test_pdf.py` exercising `tests/fixtures/sample.pdf` (the scripted fixture from §7.2); cheap verifier ported.
+- Migration test (`tests/test_pdf.py::test_migration_byte_identical`): run `tests/fixtures/sample.pdf` through both `git show 3ec3edb:pdf_to_markdown.py` (the pre-refactor entry point, captured as a copy in `tests/fixtures/legacy_pdf_to_markdown.py`) and the new `convert.py`, assert byte-identical markdown output.
+- Update `CLAUDE.md` to describe the new module layout (`convert.py`, `materials/core/`, `materials/formats/pdf.py`) and the deprecation shim. Remove stale claims about `pdf_to_markdown.py` being the main converter.
 
 **Ships:** PDF-only converter on the new architecture. Same UX, same flags, same output.
 
@@ -227,10 +242,10 @@ Five stages. Each stage is independently shippable and useful.
 **Goal:** lowest-friction new format.
 
 - Create `formats/html.py`. Pure Docling pipeline, optional bs4 pre-clean.
-- Section markers (numbered) per §5.2.
+- Section markers (numbered) per §5.2; `core/output.py::sanitize_heading_text` lands here.
 - HTML cheap verifier.
-- HTML test + fixture.
-- README updated with HTML usage.
+- HTML test + fixture (the §7.2 fixture exercises §5.2 escaping via a heading containing `--`).
+- README updated with HTML usage; `CLAUDE.md` updated to add HTML to the supported-formats section and note the bs4 optional dependency.
 
 **Ships:** PDF + HTML.
 
@@ -239,12 +254,13 @@ Five stages. Each stage is independently shippable and useful.
 **Goal:** memo/document workflow. Lean default, opt-in maximalist.
 
 - Create `formats/docx.py`.
-- python-docx integration for comments, footnotes, revisions.
+- python-docx integration for comments, footnotes, revisions. **Top-level comments only** in this stage; threaded replies are a documented limitation (§5.3).
 - `--full`, `--show-revisions`, `--keep-images` flags.
-- Section markers (numbered).
+- Section markers (numbered) using `core/output.py::sanitize_heading_text`; no-headings fallback per §5.3.
 - DOCX cheap + deep verifiers.
-- DOCX test + fixture (built with one inserted comment, one footnote).
+- DOCX test + fixture (scripted via `tests/fixtures/build/build_docx.py` — one paragraph, one comment, one footnote).
 - `requirements.txt` adds `python-docx>=1.1.0`.
+- `CLAUDE.md` updated to document the DOCX format and its flags.
 
 **Ships:** PDF + HTML + DOCX.
 
@@ -257,8 +273,9 @@ Five stages. Each stage is independently shippable and useful.
 - Slide markers + `<!-- Speaker notes -->` markers.
 - `--notes-only` flag.
 - PPTX cheap + deep verifiers.
-- PPTX test + fixture.
+- PPTX test + fixture (scripted via `tests/fixtures/build/build_pptx.py`).
 - **No new dependencies** (Docling handles it; verified empirically).
+- `CLAUDE.md` updated to document PPTX support and speaker-notes behavior.
 
 **Ships:** all four formats. Project goal achieved.
 
@@ -266,9 +283,9 @@ Five stages. Each stage is independently shippable and useful.
 
 - Remove `pdf_to_markdown.py` deprecation shim.
 - Add `materials/core/parallel.py` with `ProcessPoolExecutor`-based batch parallelism (per-worker model warmup; opt-in via `--workers N`, default 1).
-- Performance benchmarking on a real casebook corpus (≥20 files) to validate the parallelism win threshold; if benchmark shows no win below 20 files, document that and keep default `--workers 1`.
+- Performance benchmarking — Polk runs `tests/bench/run_bench.py` against a personal casebook corpus (≥20 files) and pastes results into the stage-5 PR description. If benchmark shows no win below 20 files, document that and keep default `--workers 1`. (The bench script is committed; the corpus is not — it's user content.)
 - `verify_cli.py` standalone verifier consolidating `verify_conversion.py` + `verify_page_markers.py`; old scripts become deprecation shims (removed at next cycle).
-- README final pass; CLAUDE.md updated with the new architecture.
+- README final pass; `CLAUDE.md` final pass to remove all stage-1-through-4 staleness and reflect the shipped state.
 
 **Ships:** the whole suite, polished.
 
@@ -287,8 +304,9 @@ Five stages. Each stage is independently shippable and useful.
 - Cloud-hosted conversion service — no.
 - Format conversion in the other direction (markdown → PDF/DOCX/PPTX) — no; that's `md-to-pdf` and `polk-document` skills.
 
-## 11. Deprecation lifecycle (Rex Minor 3 fix)
+## 11. Deprecation and documentation lifecycle
 
 - `pdf_to_markdown.py` deprecation shim ships in **stage 1**.
 - Removed in **stage 5**.
 - `verify_conversion.py` and `verify_page_markers.py` deprecation shims ship in **stage 5**, removed at the next material change after stage 5.
+- **CLAUDE.md update rule:** every stage that changes the architecture also updates `CLAUDE.md` to reflect the architecture as of that stage's merge. No stage merges with a stale `CLAUDE.md`. This rule applies retroactively to any stage description above that didn't already include a `CLAUDE.md` line.
