@@ -98,6 +98,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-continue-on-error", dest="continue_on_error",
                         action="store_false",
                         help="In batch mode, stop on the first file failure")
+    parser.add_argument(
+        "--workers", type=int, default=1, metavar="N",
+        help="Batch mode: parallel worker processes (default 1 = serial). "
+             "Each worker pays per-process model-warmup cost; useful for large batches.",
+    )
     parser.add_argument("--log-file", help="Path to log file")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Verbose (DEBUG) logging")
@@ -133,6 +138,7 @@ def _dispatch_single(input_path: str, args: argparse.Namespace) -> int:
         show_revisions=args.show_revisions,
         keep_images=args.keep_images,
         notes_only=args.notes_only,
+        workers=args.workers,
     )
     result = converter.convert(input_path, options)
     if result.status != "success":
@@ -164,6 +170,7 @@ def _dispatch_batch(input_dir: str, args: argparse.Namespace) -> int:
             recursive=args.recursive,
             save_report=args.save_report,
             page_markers=args.page_markers,
+            workers=args.workers,
         )
         total_success += result.get("success_count", 0)
         total_errors += result.get("error_count", 0)

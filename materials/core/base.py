@@ -33,6 +33,7 @@ class ConversionOptions:
     keep_images: bool = False  # DOCX: extract images to disk
     notes_only: bool = False  # PPTX: emit speaker-notes transcript only
     strip_html_noise: bool = False  # HTML: bs4 nav/script pre-strip
+    workers: int = 1  # Batch mode: parallel worker processes (1 = serial)
 
 
 @dataclass
@@ -110,11 +111,12 @@ class BaseConverter(ABC):
         recursive: bool = False,
         save_report: bool = False,
         page_markers: bool = True,
+        workers: int = 1,
     ) -> Dict[str, Any]:
         """Convert every file in `input_dir` whose extension this converter
-        supports. Returns `{success_count, error_count, reports}`. Subclasses
-        override this to add format-specific batch optimizations (e.g., the
-        PDF warmed-Docling-model trick); the default is a simple per-file loop.
+        supports. Returns `{success_count, error_count, reports}`. Set
+        `workers > 1` for ProcessPoolExecutor parallelism (each worker pays
+        per-process model-warmup cost; useful for large batches).
         """
         from materials.core.output import default_output_path  # local import to avoid cycle
 
@@ -125,9 +127,18 @@ class BaseConverter(ABC):
 
         glob = "**/*" if recursive else "*"
         candidates = [
-            p for p in in_dir.glob(glob)
+            str(p) for p in in_dir.glob(glob)
             if p.is_file() and p.suffix.lower() in self.extensions
         ]
+
+        if workers > 1 and len(candidates) > 1:
+            from materials.core.parallel import parallel_convert_files
+            opts = ConversionOptions(
+                output_path=output_dir,
+                page_markers=page_markers,
+                save_report=save_report,
+            )
+            return parallel_convert_files(self.__class__, candidates, opts, workers)
 
         success_count = 0
         error_count = 0
@@ -135,15 +146,15 @@ class BaseConverter(ABC):
         for src in candidates:
             out_override = None
             if output_dir:
-                out_override = str(Path(output_dir) / src.with_suffix(".md").name)
+                out_override = str(Path(output_dir) / Path(src).with_suffix(".md").name)
             opts = ConversionOptions(output_path=out_override, page_markers=page_markers)
-            result = self.convert(str(src), opts)
+            result = self.convert(src, opts)
             if result.status == "success":
                 success_count += 1
             else:
                 error_count += 1
             reports.append({
-                "input": str(src),
+                "input": src,
                 "status": result.status,
                 "output_file": result.output_file,
                 "error": result.error,

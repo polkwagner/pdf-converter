@@ -1467,10 +1467,17 @@ class PDFConverter(BaseConverter):
         recursive: bool = False,
         save_report: bool = False,
         page_markers: bool = True,
+        workers: int = 1,
     ) -> Dict:
-        """Convert every supported file in `input_dir`. Returns a summary dict
-        with at least `success_count` and `error_count` keys so callers can
-        propagate exit codes (spec §6.4)."""
+        """Serial path: warmed-model trick (legacy batch_convert_directory).
+        Parallel path: delegate to BaseConverter.convert_directory which uses
+        ProcessPoolExecutor; per-worker warmup is paid up front.
+        """
+        if workers > 1:
+            return super().convert_directory(
+                input_dir, output_dir=output_dir, recursive=recursive,
+                save_report=save_report, page_markers=page_markers, workers=workers,
+            )
         logger = logging.getLogger("pdf_converter")
         result = batch_convert_directory(
             input_dir,
