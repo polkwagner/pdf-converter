@@ -1,6 +1,6 @@
 # PDF to Markdown Converter
 
-Convert PDF and HTML files to markdown format optimized for AI tools, using **Docling** - IBM Research's document understanding library. Future stages add DOCX and PPTX support.
+Convert PDF, DOCX, and HTML files to markdown format optimized for AI tools, using **Docling** - IBM Research's document understanding library. Future stages add PPTX support.
 
 ## Features
 
@@ -15,6 +15,7 @@ Convert PDF and HTML files to markdown format optimized for AI tools, using **Do
 - **OCR support** - Optional OCR for scanned documents
 - **Page range selection** - Extract specific sections
 - **HTML support** - Convert articles, web pages, and HTML exports to clean markdown with numbered section markers. Optional `--strip-html-noise` removes navigation, footers, and ad/cookie clutter via beautifulsoup4.
+- **DOCX support** - Convert Word documents to clean markdown with section markers. Footnotes always preserved as `[^N]` references; reviewer comments included via `--full`; tracked changes shown via `--show-revisions`.
 - **Optimized for AI** - Output tailored for LLM consumption (Claude, GPT-4, etc.)
 
 ## Installation
@@ -122,6 +123,24 @@ python convert.py article.html --strip-html-noise -o article.md
 ```
 
 HTML output uses **section markers** instead of page markers: `<!-- Section 1: Title -->`, `<!-- Section 2: First heading -->`, etc. Markers are inserted at H1 and H2 boundaries; H3 and deeper headings appear as ordinary `### ...` markdown without their own markers.
+
+### DOCX Conversion
+
+```bash
+# Lean default — comments dropped, footnotes preserved
+python convert.py memo.docx -o memo.md
+
+# Include reviewer comments in a `## Reviewer Comments` appendix
+python convert.py memo.docx --full -o memo.md
+
+# Render tracked changes inline as [+ added +] / [- removed -]
+python convert.py memo.docx --show-revisions -o memo.md
+
+# Extract embedded images to <output>_files/ alongside the markdown
+python convert.py memo.docx --keep-images -o memo.md
+```
+
+DOCX uses **section markers** (numbered, like HTML). The lean default produces clean prose suited to AI ingestion; opt into the maximalist behavior with `--full` when reviewer-comment workflows matter. Footnotes — common in legal memos — are always preserved as `[^N]` markdown footnotes with a `## Footnotes` section appended at the end.
 
 ## Verification
 
