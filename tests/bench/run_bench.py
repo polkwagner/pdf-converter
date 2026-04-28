@@ -64,6 +64,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Corpus: {pdf_dir} ({file_count} PDFs)")
     print(f"")
 
+    # Warmup pass: load the Docling model into the OS page cache so subsequent
+    # measurements aren't biased toward "first run is slow because of cold load."
+    # Discard the result.
+    print(f"  warmup (workers=1, discarded): ", end="", flush=True)
+    warmup_elapsed, _ok, _err = _bench_one(pdf_dir, 1)
+    print(f"{warmup_elapsed:.1f}s")
+    print()
+
     worker_counts = [1, 2, 4, 8]
     worker_counts = [w for w in worker_counts if w == 1 or w * 2 <= file_count]
     if not worker_counts:
