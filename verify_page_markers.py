@@ -185,12 +185,19 @@ def verify_page_markers(pdf_file, md_file, sample_size=50):
         'blank_pages': blank_pages
     }
 
-if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        print("Usage: python verify_page_markers.py <pdf_file> <markdown_file>")
-        sys.exit(1)
+def main():
+    """Deprecation shim: forwards to verify_cli.py markers."""
+    import sys
+    print(
+        "[DEPRECATED] use 'verify_cli.py markers ...' — "
+        "verify_page_markers.py CLI will be removed in a follow-up cycle",
+        file=sys.stderr,
+    )
+    from verify_cli import main as cli_main
+    sys.argv[0] = "verify_cli.py"
+    sys.argv = [sys.argv[0], "markers"] + sys.argv[1:]
+    sys.exit(cli_main())
 
-    pdf_file = sys.argv[1]
-    md_file = sys.argv[2]
 
-    verify_page_markers(pdf_file, md_file)
+if __name__ == "__main__":
+    main()

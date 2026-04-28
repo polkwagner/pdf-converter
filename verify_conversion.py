@@ -323,59 +323,18 @@ def batch_verify(directory: str, pdf_dir: str = None, pattern: str = "*.md") -> 
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Verify PDF to Markdown conversion completeness',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+    """Deprecation shim: forwards to verify_cli.py content."""
+    import sys
+    print(
+        "[DEPRECATED] use 'verify_cli.py content ...' — "
+        "verify_conversion.py CLI will be removed in a follow-up cycle",
+        file=sys.stderr,
     )
-
-    parser.add_argument(
-        'input',
-        nargs='?',
-        help='PDF file, Markdown file, or directory (with --batch)'
-    )
-
-    parser.add_argument(
-        'markdown',
-        nargs='?',
-        help='Markdown file to verify against PDF'
-    )
-
-    parser.add_argument(
-        '--batch',
-        action='store_true',
-        help='Verify all markdown files in directory'
-    )
-
-    parser.add_argument(
-        '--pdf-dir',
-        help='Directory containing source PDF files (for batch mode)'
-    )
-
-    parser.add_argument(
-        '-q', '--quiet',
-        action='store_true',
-        help='Suppress detailed output'
-    )
-
-    args = parser.parse_args()
-
-    if args.batch:
-        if not args.input:
-            print("Error: Directory required for batch verification")
-            sys.exit(1)
-        batch_verify(args.input, pdf_dir=args.pdf_dir)
-    else:
-        if not args.input or not args.markdown:
-            print("Error: Both PDF and Markdown files required")
-            print("Usage: python verify_conversion.py <pdf_file> <markdown_file>")
-            sys.exit(1)
-
-        report = verify_conversion(args.input, args.markdown, verbose=not args.quiet)
-
-        # Exit with error code if verification failed
-        if report['status'] == 'FAILED':
-            sys.exit(1)
+    from verify_cli import main as cli_main
+    sys.argv[0] = "verify_cli.py"
+    sys.argv = [sys.argv[0], "content"] + sys.argv[1:]
+    sys.exit(cli_main())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
