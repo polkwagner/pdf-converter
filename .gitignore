@@ -12,6 +12,7 @@ ENV/
 # Distribution / packaging
 dist/
 build/
+!tests/fixtures/build/
 *.egg-info/
 
 # Testing
@@ -26,12 +27,14 @@ htmlcov/
 *.swo
 *~
 
-# Output files (ignore conversion outputs at repo root, but keep docs and READMEs)
+# Output files (ignore conversion outputs at repo root, but keep docs, READMEs, and test fixtures)
 *.md
 !README.md
 !CLAUDE.md
 !docs/**/*.md
+!tests/fixtures/**/*.md
 *.pdf
+!tests/fixtures/**/*.pdf
 
 # Logs
 *.log
