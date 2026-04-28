@@ -31,19 +31,22 @@ There is no linter config and no build step. `requirements.txt` pins minimum ver
 
 ```bash
 # Single file
-./venv/bin/python pdf_to_markdown.py input.pdf -o output.md
+./venv/bin/python convert.py input.pdf -o output.md
 
 # Batch (reuses the Docling ML model across files — 3-5x faster)
-./venv/bin/python pdf_to_markdown.py ./pdfs/ --batch
+./venv/bin/python convert.py ./pdfs/ --batch
 
 # Page range
-./venv/bin/python pdf_to_markdown.py book.pdf --pages 1-50 -o ch1.md
+./venv/bin/python convert.py book.pdf --pages 1-50 -o ch1.md
 
 # OCR for scanned PDFs (slow)
-./venv/bin/python pdf_to_markdown.py scan.pdf --ocr
+./venv/bin/python convert.py scan.pdf --ocr
 
 # Disable page markers
-./venv/bin/python pdf_to_markdown.py doc.pdf --no-page-markers -o out.md
+./venv/bin/python convert.py doc.pdf --no-page-markers -o out.md
+
+# Run the test suite
+./venv/bin/python -m pytest tests/
 
 # Verify a single conversion (compares pdf↔md word/char/page counts)
 ./venv/bin/python verify_conversion.py source.pdf output.md
