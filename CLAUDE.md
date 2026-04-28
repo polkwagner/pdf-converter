@@ -70,23 +70,45 @@ Defaults worth knowing:
 ## Architecture
 
 The codebase is being migrated from a single-file PDF converter into a multi-format
-package under `materials/`. The current state (post-stage-1) is:
+package under `materials/`. The current state (post-stage-2, plus a code-review fix pass) is:
 
-- `convert.py` — CLI entry point. Auto-detects format from extension and dispatches.
-- `materials/core/` — shared types and utilities. `base.py` (BaseConverter ABC,
-  ConversionOptions, ConversionResult), `output.py` (path helpers and
-  `sanitize_heading_text`), `verify.py` (cheap-check primitives).
+- `convert.py` — CLI entry point. Auto-detects format from extension and
+  dispatches via the `REGISTRY` dict to a `BaseConverter` subclass. Owns
+  argparse, path computation, and exit-code propagation. Imports CLI
+  infrastructure (`setup_logging`, `RICH_AVAILABLE`) from `materials.core.logging` —
+  not from any format module.
+- `materials/core/` — shared types and utilities used by every format converter.
+  - `base.py` — `BaseConverter` ABC (with `convert` and `convert_directory`),
+    `ConversionOptions` dataclass (uniform across formats; format-specific
+    fields ignored by converters that don't care), `ConversionResult` with a
+    canonical `statistics` schema documented in its docstring.
+  - `output.py` — `default_output_path`, `default_log_path`, `sanitize_heading_text`
+    (the §5.2 escaping rule).
+  - `verify.py` — cheap-check primitives (`check_non_empty`, `check_word_retention`,
+    `count_words`, `VerifyReport`).
+  - `logging.py` — `setup_logging` and `RICH_AVAILABLE` detection. Lives in
+    core because logging is CLI infrastructure, not a format property.
 - `materials/formats/pdf.py` — all PDF logic (formerly in `pdf_to_markdown.py`).
+  16 verbatim functions moved from the legacy snapshot, plus the `PDFConverter`
+  class. `PDFConverter.convert()` wraps the legacy call in try/except so
+  `FileNotFoundError` and other exceptions return `ConversionResult(status="error")`
+  instead of raising.
 - `materials/formats/html.py` — HTML converter. Pure Docling pipeline plus
-  optional bs4 noise-stripping (`--strip-html-noise`). First consumer of
-  `materials/core/output.py::sanitize_heading_text` and `materials/core/verify.py`.
+  optional bs4 noise-stripping (`--strip-html-noise`). Encoding-aware reader
+  (BOM detection, `<meta charset>` sniff, cp1252/latin-1 fallback for Word
+  HTML exports). First consumer of `core.output.sanitize_heading_text` and
+  `core.verify`.
 - `pdf_to_markdown.py` — deprecation shim only; removed in stage 5.
 - `console.py` — Rich UX helpers (unchanged).
 - `verify_conversion.py`, `verify_page_markers.py` — verification scripts
   (consolidated into `verify_cli.py` in stage 5).
-- `tests/` — pytest test suite. `tests/fixtures/build/` holds scripted fixture
-  builders; `tests/fixtures/legacy_pdf_to_markdown.py` is a frozen snapshot
-  used by the migration test.
+- `tests/` — pytest test suite.
+  - `tests/fixtures/build/` — scripted fixture builders (PDF and HTML).
+  - `tests/fixtures/sample.golden.md` — pinned reference output for the PDF
+    migration test. Regenerate when accepting a deliberate Docling upgrade
+    or behavior change.
+  - `tests/fixtures/legacy_pdf_to_markdown.py` — frozen pre-refactor snapshot;
+    cross-checked against the same golden as `convert.py`.
 
 ### PDF conversion pipeline (`materials/formats/pdf.py`)
 
@@ -101,7 +123,7 @@ Orchestrates four stages per PDF:
 
 HTML conversion is simpler than PDF because Docling handles the markup natively. The pipeline:
 
-1. **Read the file** as UTF-8 (with latin-1 fallback for legacy pages).
+1. **Read the file** with encoding-aware fallback: UTF BOM detection (`utf-8-sig`, `utf-16-le`, `utf-16-be`), then `<meta charset>` sniff in the first 4KB, then cp1252 (the dominant Word HTML export encoding), then latin-1 as a last resort. Word smart-quotes and em-dashes survive the round trip.
 2. **Optional noise strip** — if `--strip-html-noise` is set, beautifulsoup4 removes `<script>`, `<style>`, `<nav>`, `<footer>`, `<aside>`, and elements whose class matches `sidebar|advert|cookie|consent`. Without the flag, the raw HTML is passed through.
 3. **Docling convert** — the cleaned (or raw) HTML is written to a temp file and passed to `DocumentConverter()`. Docling produces markdown.
 4. **Section markers** — a regex walks the markdown for `^#` and `^##` lines and inserts numbered `<!-- Section K: heading-text -->` markers before each one. H3+ are not numbered (sectioning happens at H1/H2 only). `core/output.py::sanitize_heading_text` is applied to the heading text.
@@ -138,11 +160,32 @@ Two separate verifiers with different scopes:
 
 ### Tests
 
-`pytest tests/` runs the suite. The load-bearing test is
-`tests/test_pdf.py::test_migration_byte_identical`, which guarantees that
-`convert.py` produces output byte-equal to the frozen legacy snapshot at
-`tests/fixtures/legacy_pdf_to_markdown.py`. Every refactor that touches PDF
-logic must keep this test green.
+`pytest tests/` runs the suite. The load-bearing tests are in
+`tests/test_pdf.py`:
+
+- `test_new_matches_golden` — `convert.py` output must equal
+  `tests/fixtures/sample.golden.md`, the pinned reference generated on
+  Docling 2.65.0 at Stage 1 completion.
+- `test_legacy_matches_golden` — the frozen legacy snapshot must produce
+  the same golden output. Cross-coverage: catches accidental drift in
+  `tests/fixtures/legacy_pdf_to_markdown.py`.
+- `test_fixture_unchanged_after_conversion` — regression guard against
+  PyMuPDF/Docling mutating the source fixture during read.
+
+When a deliberate Docling upgrade or behavior change produces different
+PDF output, regenerate the golden:
+
+```bash
+./venv/bin/python convert.py tests/fixtures/sample.pdf -o tests/fixtures/sample.golden.md
+```
+
+This turns the Docling-version-coupled identity comparison into an
+explicit, reviewable acceptance step.
+
+HTML tests cover section markers, the §5.2 escaping rule (dashes,
+backticks), `--strip-html-noise` removing `<nav>`/`<footer>`,
+`--no-page-markers` suppressing markers, and the
+beautifulsoup4-not-installed error path (simulated via `sys.modules`).
 
 Fixtures are scripted — every binary fixture has a builder under
 `tests/fixtures/build/` so they can be regenerated deterministically.
