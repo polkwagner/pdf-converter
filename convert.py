@@ -15,12 +15,13 @@ from pathlib import Path
 
 from materials.core.base import ConversionOptions
 from materials.core.logging import RICH_AVAILABLE, setup_logging
+from materials.formats.docx import DOCXConverter
 from materials.formats.html import HTMLConverter
 from materials.formats.pdf import PDFConverter, parse_page_range
 
 # Extension → converter instance. Stage 2-4 register more entries here.
 REGISTRY = {}
-for converter in (PDFConverter(), HTMLConverter()):
+for converter in (PDFConverter(), HTMLConverter(), DOCXConverter()):
     for ext in converter.extensions:
         REGISTRY[ext] = converter
 
@@ -32,6 +33,8 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  %(prog)s chapter1.pdf -o chapter1.md\n"
+            "  %(prog)s memo.docx -o memo.md\n"
+            "  %(prog)s memo.docx --full -o memo-with-comments.md\n"
             "  %(prog)s article.html -o article.md\n"
             "  %(prog)s ./casebooks/ --batch\n"
             "  %(prog)s casebook.pdf --pages 1-50 -o excerpt.md\n"
@@ -58,6 +61,24 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Strip <script>, <style>, <nav>, <footer>, <aside> from HTML before "
              "conversion. Requires beautifulsoup4. (HTML only.)",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="DOCX: include comments appendix and inline anchors. Default lean mode "
+             "drops comments (footnotes are always preserved).",
+    )
+    parser.add_argument(
+        "--show-revisions",
+        action="store_true",
+        help="DOCX: render tracked changes as [+ added +] / [- removed -] inline. "
+             "Without this flag, revisions are accepted-final.",
+    )
+    parser.add_argument(
+        "--keep-images",
+        action="store_true",
+        help="DOCX: extract embedded images to <output>_files/. "
+             "Without this flag, images become <!-- image --> placeholders.",
     )
     parser.add_argument("--save-report", action="store_true",
                         help="Save detailed conversion report JSON (batch mode)")
@@ -98,6 +119,9 @@ def _dispatch_single(input_path: str, args: argparse.Namespace) -> int:
         quiet=False,
         verbose=args.verbose,
         strip_html_noise=args.strip_html_noise,
+        full=args.full,
+        show_revisions=args.show_revisions,
+        keep_images=args.keep_images,
     )
     result = converter.convert(input_path, options)
     if result.status != "success":
