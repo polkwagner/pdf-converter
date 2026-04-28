@@ -51,6 +51,15 @@ There is no linter config and no build step. `requirements.txt` pins minimum ver
 # HTML with noise stripping
 ./venv/bin/python convert.py article.html --strip-html-noise -o article.md
 
+# DOCX (lean default — comments dropped, footnotes preserved)
+./venv/bin/python convert.py memo.docx -o memo.md
+
+# DOCX with reviewer comments appendix
+./venv/bin/python convert.py memo.docx --full -o memo-with-comments.md
+
+# DOCX with tracked changes shown inline
+./venv/bin/python convert.py memo.docx --show-revisions -o memo-redlined.md
+
 # Run the test suite
 ./venv/bin/python -m pytest tests/
 
@@ -98,6 +107,12 @@ package under `materials/`. The current state (post-stage-2, plus a code-review 
   (BOM detection, `<meta charset>` sniff, cp1252/latin-1 fallback for Word
   HTML exports). First consumer of `core.output.sanitize_heading_text` and
   `core.verify`.
+- `materials/formats/docx.py` — DOCX converter. Docling for prose +
+  python-docx (with lxml) for comments, footnotes, and tracked changes.
+  Lean default per spec §4.6: drops comments and accepts revisions, but
+  always preserves footnotes as `[^N]` markdown footnotes. Three opt-in
+  flags: `--full` (comments appendix), `--show-revisions` (inline ins/del),
+  `--keep-images` (extract images to disk).
 - `pdf_to_markdown.py` — deprecation shim only; removed in stage 5.
 - `console.py` — Rich UX helpers (unchanged).
 - `verify_conversion.py`, `verify_page_markers.py` — verification scripts
@@ -130,6 +145,48 @@ HTML conversion is simpler than PDF because Docling handles the markup natively.
 5. **Cheap verifier** — output non-empty + word retention ratio ≥60% (HTML loses lots of tag overhead, hence the lower minimum).
 
 bs4 is an **optional** dependency. The converter only imports it if `--strip-html-noise` is set; without the flag, bs4 doesn't need to be installed.
+
+### DOCX conversion pipeline (`materials/formats/docx.py`)
+
+DOCX conversion uses two parallel reads:
+
+1. **python-docx + lxml** opens the .docx archive directly to extract
+   auxiliary content the Word XML carries: `comments.xml` (top-level
+   comments only — threaded replies in `commentsExtended.xml` are a known
+   limitation, deferred), `footnotes.xml`, and `<w:ins>` / `<w:del>`
+   tracked-changes elements in the body.
+2. **Docling** runs its DOCX pipeline on the same file to produce the
+   prose markdown (headings, paragraphs, tables).
+
+Empirical Docling behavior worth knowing:
+- Docling drops footnotes entirely from DOCX output. The converter extracts
+  them from `footnotes.xml` and appends a `## Footnotes` section.
+- Docling drops both `<w:ins>` and `<w:del>` runs. The converter
+  re-surfaces insertions as plain prose in lean mode (accepted-final
+  behavior) or with `[+ ... +]` markers in `--show-revisions`. Deletions
+  appear only in `--show-revisions` mode, surfaced with `[- ... -]` markers
+  near the end of the output.
+- Docling shifts heading levels by one (source H1 → `##` markdown,
+  source H2 → `###`). Section markers auto-detect the two smallest
+  heading levels actually present, which is functionally equivalent to
+  "H1 and H2 in the source" without hardcoding the level offset.
+
+Post-processing layers atop the Docling markdown:
+
+- **Footnotes** — always preserved, appended as a `## Footnotes` section.
+- **Comments** — dropped by default. With `--full`, a `## Reviewer Comments`
+  appendix lists each comment with author, date, body, and quoted referenced
+  text. Best-effort `[C1]` inline anchors are inserted where the referenced
+  phrase still appears in the markdown.
+- **Tracked changes** — accepted-final by default. With `--show-revisions`,
+  insertions wrapped in `[+ ... +]` and deletions surfaced as `[- ... -]`.
+- **Images** — replaced with `<!-- image -->` placeholders. With
+  `--keep-images`, extracted to disk and referenced via `![](path)` markdown.
+- **Section markers** — numbered `<!-- Section K: heading -->` markers via
+  `core/output.py::sanitize_heading_text`, with auto-detected heading levels.
+
+Cheap verifier requires ≥90% word retention (DOCX is text-rich; lower
+ratios indicate Docling lost meaningful content).
 
 ### Page-marker insertion (the architecturally non-obvious part)
 
