@@ -12,9 +12,7 @@ The project runs in a venv at `./venv/`. There is no `pip install -e .` — scri
 
 ```bash
 ./venv/bin/python convert.py ...              # main converter (PDF in stage 1; DOCX/PPTX/HTML in later stages)
-./venv/bin/python pdf_to_markdown.py ...      # DEPRECATED — forwards to convert.py; removed in stage 5
-./venv/bin/python verify_conversion.py ...    # output verifier (consolidated into verify_cli.py in stage 5)
-./venv/bin/python verify_page_markers.py ...  # page-marker accuracy check (consolidated in stage 5)
+./venv/bin/python verify_cli.py ...           # verifier CLI with `content` and `markers` subcommands
 ./venv/bin/python -m pytest tests/            # test suite (new in stage 1)
 ```
 
@@ -66,14 +64,15 @@ There is no linter config and no build step. `requirements.txt` pins minimum ver
 # PPTX as a lecture transcript (notes only, slides without notes skipped)
 ./venv/bin/python convert.py deck.pptx --notes-only -o lecture.md
 
+# Parallel batch (4 worker processes; useful past ~8 large files)
+./venv/bin/python convert.py ./casebooks/ --batch --workers 4
+
 # Run the test suite
 ./venv/bin/python -m pytest tests/
 
-# Verify a single conversion (compares pdf↔md word/char/page counts)
-./venv/bin/python verify_conversion.py source.pdf output.md
-
-# Audit page-marker accuracy on a sample
-./venv/bin/python verify_page_markers.py source.pdf output.md
+# Verifier (new entry point)
+./venv/bin/python verify_cli.py content source.pdf output.md
+./venv/bin/python verify_cli.py markers source.pdf output.md
 ```
 
 Defaults worth knowing:
@@ -126,10 +125,15 @@ package under `materials/`. The current state (post-stage-2, plus a code-review 
   The `--notes-only` flag produces a clean lecture transcript (slide
   numbers + notes text only, skipping bullet content and slides without
   notes).
-- `pdf_to_markdown.py` — deprecation shim only; removed in stage 5.
 - `console.py` — Rich UX helpers (unchanged).
-- `verify_conversion.py`, `verify_page_markers.py` — verification scripts
-  (consolidated into `verify_cli.py` in stage 5).
+- `verify_conversion.py`, `verify_page_markers.py` — thin deprecation shims
+  that forward to `verify_cli.py`. Function bodies are still importable;
+  the CLI invocations print a deprecation warning and forward.
+- `verify_cli.py` — consolidated verifier with `content` and `markers` subcommands.
+- `materials/core/parallel.py` — `parallel_convert_files` for ProcessPoolExecutor
+  batch conversion. Workers re-import the converter class lazily; per-worker
+  DocumentConverter warmup is the trade-off cost. Serial path wins on small
+  batches; parallelism wins past ~8 large files.
 - `tests/` — pytest test suite.
   - `tests/fixtures/build/` — scripted fixture builders (PDF and HTML).
   - `tests/fixtures/sample.golden.md` — pinned reference output for the PDF
@@ -246,12 +250,14 @@ Common breakage points: changes to Docling's markdown serialization (whitespace,
 
 All Rich-dependent output (panels, progress bars, spinners, batch summary tables) is isolated here. The main script imports it lazily under a `RICH_AVAILABLE` flag and degrades to plain `logger.info` calls if Rich is missing. `suppress_docling_logging()` silences Docling's stdout chatter so the Rich progress bars aren't shredded.
 
-### `verify_conversion.py` and `verify_page_markers.py`
+### Verification (`verify_cli.py`)
 
-Two separate verifiers with different scopes:
+The consolidated verifier provides two subcommands:
 
-- `verify_conversion.py` — coarse sanity check. Compares PDF and markdown by page count, word/char retention ratio, table presence, image-heavy page detection. Has a `--batch` mode that walks a directory of `.md` outputs against a parallel directory of `.pdf` sources. Pass/warn/fail thresholds are encoded in `verify_conversion`.
-- `verify_page_markers.py` — fine-grained page-marker correctness audit. Samples markers, extracts surrounding text, fuzzy-matches against the corresponding PyMuPDF page, reports a hit rate. Use this when you suspect provenance is misfiring on a specific corpus.
+- `verify_cli.py content` — coarse sanity check. Compares source and markdown by page count, word/char retention ratio, table presence, image-heavy page detection. Pass/warn/fail thresholds vary by format (90% for DOCX, 75% for PPTX, 60% for HTML).
+- `verify_cli.py markers` — fine-grained page/slide marker audit (PDF and PPTX only). Samples markers, extracts surrounding text, fuzzy-matches against the source using PyMuPDF/python-pptx, reports a hit rate. Use this when you suspect provenance is misfiring on a specific corpus.
+
+Both support `--batch` mode: walk a directory of `.md` outputs against a parallel directory of source files.
 
 ### Tests
 

@@ -35,30 +35,30 @@ pip install -r requirements.txt
 ### Single File Conversion
 
 ```bash
-python pdf_to_markdown.py input.pdf -o output.md
+python convert.py input.pdf -o output.md
 ```
 
 ### Batch Conversion
 
 ```bash
 # Convert all PDFs in a directory
-python pdf_to_markdown.py ./casebooks/ --batch
+python convert.py ./casebooks/ --batch
 
 # Recursive conversion (includes subdirectories)
-python pdf_to_markdown.py ./casebooks/ --batch --recursive
+python convert.py ./casebooks/ --batch --recursive
 
 # Save detailed JSON report
-python pdf_to_markdown.py ./casebooks/ --batch --save-report
+python convert.py ./casebooks/ --batch --save-report
 ```
 
 ### Page Range Selection
 
 ```bash
 # Convert specific pages (1-indexed)
-python pdf_to_markdown.py casebook.pdf --pages 1-50 -o chapter1.md
+python convert.py casebook.pdf --pages 1-50 -o chapter1.md
 
 # Convert multiple ranges
-python pdf_to_markdown.py casebook.pdf --pages 1-10,25-35 -o sections.md
+python convert.py casebook.pdf --pages 1-10,25-35 -o sections.md
 ```
 
 ### Page Number Markers (for AI/RAG)
@@ -69,11 +69,11 @@ Page markers are added automatically as HTML comments (`<!-- Page N -->`) throug
 
 ```bash
 # Page markers enabled by default
-python pdf_to_markdown.py casebook.pdf -o output.md
+python convert.py casebook.pdf -o output.md
 # Output includes: <!-- Page 1 -->, <!-- Page 2 -->, etc.
 
 # Disable page markers if needed
-python pdf_to_markdown.py document.pdf --no-page-markers -o output.md
+python convert.py document.pdf --no-page-markers -o output.md
 ```
 
 **How it works - Provenance-Based Approach:**
@@ -103,14 +103,14 @@ The tool uses Docling's element provenance system for accurate page tracking:
 ### Extract Images
 
 ```bash
-python pdf_to_markdown.py input.pdf --images
+python convert.py input.pdf --images
 ```
 
 ### OCR for Scanned Documents
 
 ```bash
 # Enable OCR for image-based PDFs (slower but necessary for scanned docs)
-python pdf_to_markdown.py scanned_casebook.pdf --ocr
+python convert.py scanned_casebook.pdf --ocr
 ```
 
 ### HTML Conversion
@@ -158,6 +158,15 @@ python convert.py deck.pptx --no-page-markers -o deck.md
 
 PPTX uses `<!-- Slide N -->` markers (numbered, 1-indexed). Speaker notes appear inline at slide-end with a `<!-- Speaker notes -->` marker. The `--notes-only` mode is designed for converting a lecture deck into linear prose — the speaker notes typically *are* the lecture, with the bullets serving as visual cues.
 
+### Batch parallelism
+
+```bash
+# Convert a directory of PDFs with 4 worker processes
+python convert.py ./casebooks/ --batch --workers 4
+```
+
+Each worker process pays a one-time DocumentConverter warmup cost. For small batches (≤ ~8 files), the serial path is faster because the per-worker warmup dominates. For larger batches and large per-file content (legal casebooks, multi-hundred-page documents), parallelism wins. Run `tests/bench/run_bench.py <pdf_dir>` against your own corpus to find the threshold for your hardware.
+
 ## Verification
 
 Verify conversion completeness to ensure all content was captured:
@@ -165,14 +174,21 @@ Verify conversion completeness to ensure all content was captured:
 ### Single File Verification
 
 ```bash
-python verify_conversion.py source.pdf output.md
+python verify_cli.py content source.pdf output.md
+```
+
+### Marker Accuracy Audit
+
+```bash
+# Fine-grained page/slide marker audit
+python verify_cli.py markers source.pdf output.md
 ```
 
 ### Batch Verification
 
 ```bash
-# Verify all markdown files against source PDFs
-python verify_conversion.py --batch output_dir/ --pdf-dir source_dir/
+# Verify all markdown files against source documents (auto-detects format)
+python verify_cli.py content --batch output_dir/ --source-dir source_dir/
 ```
 
 The verification tool compares:
@@ -192,13 +208,13 @@ All conversions are automatically logged to `conversion.log`:
 
 ```bash
 # Default: saves to conversion.log in output directory
-python pdf_to_markdown.py input.pdf
+python convert.py input.pdf
 
 # Custom log file location
-python pdf_to_markdown.py input.pdf --log-file /path/to/custom.log
+python convert.py input.pdf --log-file /path/to/custom.log
 
 # Verbose logging (includes DEBUG messages)
-python pdf_to_markdown.py input.pdf -v
+python convert.py input.pdf -v
 ```
 
 **Log file includes:**
