@@ -35,6 +35,8 @@ htmlcov/
 !tests/fixtures/**/*.md
 *.pdf
 !tests/fixtures/**/*.pdf
+*.html
+!tests/fixtures/**/*.html
 
 # Logs
 *.log
