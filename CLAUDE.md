@@ -11,7 +11,7 @@ A PDF→markdown converter built around **Docling** (IBM Research), with custom 
 The project runs in a venv at `./venv/`. There is no `pip install -e .` — scripts are invoked directly:
 
 ```bash
-./venv/bin/python convert.py ...              # main converter (PDF in stage 1; DOCX/PPTX/HTML in later stages)
+./venv/bin/python convert.py ...              # main converter (PDF, DOCX, PPTX, HTML)
 ./venv/bin/python verify_cli.py ...           # verifier CLI with `content` and `markers` subcommands
 ./venv/bin/python -m pytest tests/            # test suite (new in stage 1)
 ```
@@ -290,6 +290,20 @@ beautifulsoup4-not-installed error path (simulated via `sys.modules`).
 
 Fixtures are scripted — every binary fixture has a builder under
 `tests/fixtures/build/` so they can be regenerated deterministically.
+
+## Claude Code skill wrapper
+
+A natural-language wrapper for the converter lives at
+`~/.claude/skills/materials-md/SKILL.md`. The skill is a thin dispatcher —
+it maps natural-language requests like "convert this deck" or "extract the
+speaker notes" to `convert.py` flags and shells out to the Python tool.
+**No conversion logic in the skill itself**; everything goes through the
+deterministic Python converter.
+
+The skill is upstream of every text-consuming skill: `convert → eddie`,
+`convert → polk-document`, `convert → factual-pipeline-orchestrator`, and
+`convert (--notes-only) → polk-slides`. When a downstream skill needs
+markdown input from a non-markdown source, this skill is the entry point.
 
 ## Repo state notes
 
