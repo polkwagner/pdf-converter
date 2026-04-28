@@ -60,6 +60,12 @@ There is no linter config and no build step. `requirements.txt` pins minimum ver
 # DOCX with tracked changes shown inline
 ./venv/bin/python convert.py memo.docx --show-revisions -o memo-redlined.md
 
+# PPTX (default — slide markers + speaker notes)
+./venv/bin/python convert.py deck.pptx -o deck.md
+
+# PPTX as a lecture transcript (notes only, slides without notes skipped)
+./venv/bin/python convert.py deck.pptx --notes-only -o lecture.md
+
 # Run the test suite
 ./venv/bin/python -m pytest tests/
 
@@ -113,6 +119,13 @@ package under `materials/`. The current state (post-stage-2, plus a code-review 
   always preserves footnotes as `[^N]` markdown footnotes. Three opt-in
   flags: `--full` (comments appendix), `--show-revisions` (inline ins/del),
   `--keep-images` (extract images to disk).
+- `materials/formats/pptx.py` — PPTX converter. Pure Docling pipeline;
+  Docling 2.65.0+ extracts speaker notes into `ContentLayer.FURNITURE`
+  natively, so no extra dependency. Each slide gets a `<!-- Slide K -->`
+  marker; notes appear inline at slide-end with `<!-- Speaker notes -->`.
+  The `--notes-only` flag produces a clean lecture transcript (slide
+  numbers + notes text only, skipping bullet content and slides without
+  notes).
 - `pdf_to_markdown.py` — deprecation shim only; removed in stage 5.
 - `console.py` — Rich UX helpers (unchanged).
 - `verify_conversion.py`, `verify_page_markers.py` — verification scripts
@@ -187,6 +200,31 @@ Post-processing layers atop the Docling markdown:
 
 Cheap verifier requires ≥90% word retention (DOCX is text-rich; lower
 ratios indicate Docling lost meaningful content).
+
+### PPTX conversion pipeline (`materials/formats/pptx.py`)
+
+PPTX conversion is the simplest of the four formats because Docling does
+most of the heavy lifting:
+
+1. **Docling convert** produces a `DoclingDocument` with each slide as a
+   page. Speaker notes are tagged `content_layer == ContentLayer.FURNITURE`
+   and excluded from the default markdown export.
+2. **Per-slide split** uses provenance: each item's `prov[0].page_no`
+   maps it to a slide. (The `page_break_placeholder` parameter on
+   `export_to_markdown` is unreliable for PPTX — Docling 2.65.0 emits
+   only N−2 break tokens for an N-slide deck — so we use provenance as
+   the primary split strategy with placeholder and `^# ` heading split
+   as fallbacks.)
+3. **Notes extraction** walks `iterate_items(included_content_layers={FURNITURE})`
+   and groups text by slide via `prov[0].page_no`.
+4. **Three rendering modes:**
+   - **Default** — `<!-- Slide K -->` + body + `<!-- Speaker notes -->` + notes (when notes exist).
+   - **`--notes-only`** — clean lecture transcript: only slides with notes contribute, and only the slide marker + notes text appears. No bullet content. Useful for repurposing a deck as prose for an article or LLM ingestion.
+   - **`--no-page-markers`** — strip both `<!-- Slide K -->` and `<!-- Speaker notes -->` markers; just the prose.
+
+Cheap verifier: ≥75% word retention against the full BODY+FURNITURE
+markdown (the retention check is skipped in `--notes-only` mode because
+the transcript intentionally drops body content).
 
 ### Page-marker insertion (the architecturally non-obvious part)
 
