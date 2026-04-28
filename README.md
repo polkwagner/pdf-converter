@@ -1,6 +1,6 @@
 # PDF to Markdown Converter
 
-Convert PDF, DOCX, and HTML files to markdown format optimized for AI tools, using **Docling** - IBM Research's document understanding library. Future stages add PPTX support.
+Convert PDF, DOCX, PPTX, and HTML files to markdown format optimized for AI tools, using **Docling** - IBM Research's document understanding library.
 
 ## Features
 
@@ -16,6 +16,7 @@ Convert PDF, DOCX, and HTML files to markdown format optimized for AI tools, usi
 - **Page range selection** - Extract specific sections
 - **HTML support** - Convert articles, web pages, and HTML exports to clean markdown with numbered section markers. Optional `--strip-html-noise` removes navigation, footers, and ad/cookie clutter via beautifulsoup4.
 - **DOCX support** - Convert Word documents to clean markdown with section markers. Footnotes always preserved as `[^N]` references; reviewer comments included via `--full`; tracked changes shown via `--show-revisions`.
+- **PPTX support** - Convert PowerPoint decks to markdown with numbered slide markers and inline speaker notes. The `--notes-only` flag emits a clean lecture transcript — slide numbers + speaker notes text only — useful for repurposing decks as prose.
 - **Optimized for AI** - Output tailored for LLM consumption (Claude, GPT-4, etc.)
 
 ## Installation
@@ -141,6 +142,21 @@ python convert.py memo.docx --keep-images -o memo.md
 ```
 
 DOCX uses **section markers** (numbered, like HTML). The lean default produces clean prose suited to AI ingestion; opt into the maximalist behavior with `--full` when reviewer-comment workflows matter. Footnotes — common in legal memos — are always preserved as `[^N]` markdown footnotes with a `## Footnotes` section appended at the end.
+
+### PPTX conversion
+
+```bash
+# Default — slide markers + speaker notes inline
+python convert.py deck.pptx -o deck.md
+
+# Lecture transcript — only speaker notes, slides without notes are skipped
+python convert.py deck.pptx --notes-only -o lecture.md
+
+# Just the slide bodies, no markers
+python convert.py deck.pptx --no-page-markers -o deck.md
+```
+
+PPTX uses `<!-- Slide N -->` markers (numbered, 1-indexed). Speaker notes appear inline at slide-end with a `<!-- Speaker notes -->` marker. The `--notes-only` mode is designed for converting a lecture deck into linear prose — the speaker notes typically *are* the lecture, with the bullets serving as visual cues.
 
 ## Verification
 
