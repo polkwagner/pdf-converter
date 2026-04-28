@@ -90,11 +90,50 @@ def test_html_strip_noise_removes_nav_and_footer(tmp_path):
     assert "Site footer" not in md, "footer was not stripped"
 
 
-def test_html_default_keeps_nav_content(tmp_path):
-    """Without --strip-html-noise, nav/footer content goes through Docling's default handling.
-    This test documents behavior — Docling may or may not include nav text by default."""
-    out, _ = _run_convert(tmp_path)
+def test_html_no_page_markers_suppresses_sections(tmp_path):
+    """--no-page-markers must produce output with zero <!-- Section markers,
+    even though the headings themselves are still rendered as markdown."""
+    out, _ = _run_convert(tmp_path, "--no-page-markers")
     md = out.read_text(encoding="utf-8")
-    # Just verify the test runs and produces non-empty output. Default behavior
-    # depends on Docling's HTML pipeline; we don't enforce nav presence/absence here.
-    assert len(md) > 100
+    assert "<!-- Section " not in md, (
+        f"--no-page-markers should suppress section markers; output had:\n{md[:300]}"
+    )
+    # The heading itself is still rendered (we suppress the marker, not the
+    # heading line).
+    assert "Article Title" in md, "Heading text should still appear in markdown"
+
+
+def test_html_strip_noise_without_bs4_returns_actionable_error(tmp_path):
+    """If bs4 isn't installed, --strip-html-noise must fail with the actionable
+    'pip install beautifulsoup4' error rather than crashing or silently doing
+    nothing. We simulate the missing dependency by patching sys.modules."""
+    import sys as _sys
+    from materials.core.base import ConversionOptions
+    from materials.formats.html import HTMLConverter
+
+    fixture = _isolated_fixture(tmp_path)
+    out = tmp_path / "out.md"
+
+    saved_bs4 = _sys.modules.pop("bs4", None)
+    _sys.modules["bs4"] = None  # makes `from bs4 import ...` raise ImportError
+    try:
+        converter = HTMLConverter()
+        opts = ConversionOptions(
+            output_path=str(out),
+            page_markers=True,
+            strip_html_noise=True,
+        )
+        result = converter.convert(str(fixture), opts)
+    finally:
+        if saved_bs4 is not None:
+            _sys.modules["bs4"] = saved_bs4
+        else:
+            _sys.modules.pop("bs4", None)
+
+    assert result.status == "error", f"Expected error status, got {result.status}"
+    assert "beautifulsoup4" in (result.error or ""), (
+        f"Error should mention beautifulsoup4: {result.error!r}"
+    )
+    assert "pip install" in (result.error or ""), (
+        f"Error should give an install hint: {result.error!r}"
+    )
