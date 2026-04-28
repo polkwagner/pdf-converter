@@ -46,13 +46,22 @@ _TOP_HEADING_RE = re.compile(r"^# ", re.MULTILINE)
 
 def _extract_notes_by_slide(doc) -> Dict[int, List[str]]:
     """Walk the DoclingDocument tree and collect FURNITURE-layer text items
-    per slide. Returns {slide_number: [note_text, ...]}.
+    per slide, filtering out slide footers and page-number placeholders.
+    Returns {slide_number: [note_text, ...]}.
 
     Docling 2.65.0's PPTX backend stores speaker notes with
     `content_layer == ContentLayer.FURNITURE` and the slide's `prov[0].page_no`
     set to the slide index (1-based).
+
+    Heuristic for filtering: footers and page-number placeholders are typically
+    short (under 80 chars) and repeat identically across multiple slides. Speaker
+    notes are unique per slide and typically longer prose. Items that appear
+    identically on 2+ slides are treated as footers and excluded.
     """
-    notes_by_slide: Dict[int, List[str]] = {}
+    # First pass: collect all raw text items per slide and track occurrences.
+    raw_by_slide: Dict[int, List[str]] = {}
+    text_occurrences: Dict[str, int] = {}  # text → count across all slides
+
     for item, _level in doc.iterate_items(
         included_content_layers={ContentLayer.FURNITURE}
     ):
@@ -65,7 +74,26 @@ def _extract_notes_by_slide(doc) -> Dict[int, List[str]]:
         slide_no = getattr(prov[0], "page_no", None)
         if slide_no is None:
             continue
-        notes_by_slide.setdefault(slide_no, []).append(text)
+        raw_by_slide.setdefault(slide_no, []).append(text)
+        text_occurrences[text] = text_occurrences.get(text, 0) + 1
+
+    # Second pass: filter out short text strings that appear on multiple slides.
+    # These are likely footers (e.g., "Confidential", "© 2024") rather than
+    # speaker notes.
+    repeat_threshold = 2  # appears on >=2 slides
+    short_threshold = 80  # chars
+    notes_by_slide: Dict[int, List[str]] = {}
+    for slide_no, items in raw_by_slide.items():
+        kept = [
+            t for t in items
+            if not (
+                text_occurrences.get(t, 0) >= repeat_threshold
+                and len(t) < short_threshold
+            )
+        ]
+        if kept:
+            notes_by_slide[slide_no] = kept
+
     return notes_by_slide
 
 
@@ -114,6 +142,24 @@ def _split_body_markdown_by_slide(doc) -> List[str]:
             slide_lines[page_no].append(text)
 
     if slide_lines:
+        # Check for gaps in slide numbering. If some slides have no provenance
+        # items and are absent from slide_lines, log a warning and insert empty
+        # entries to keep numbering sequential.
+        logger = logging.getLogger("pptx_converter")
+        max_slide = max(slide_lines.keys())
+        expected_slides = set(range(1, max_slide + 1))
+        actual_slides = set(slide_lines.keys())
+        missing = expected_slides - actual_slides
+        if missing:
+            logger.warning(
+                f"PPTX: {len(missing)} slide(s) had no provenance items and "
+                f"are absent from output: {sorted(missing)}. "
+                f"Slide numbering may not match the source deck."
+            )
+            # Insert empty entries so output numbering stays sequential
+            for s in missing:
+                slide_lines[s] = []
+
         return [
             "\n\n".join(lines).strip()
             for _, lines in sorted(slide_lines.items())
@@ -219,6 +265,11 @@ class PPTXConverter(BaseConverter):
 
         if options.notes_only:
             markdown = _format_notes_only(num_slides, notes_by_slide)
+            # A deck with zero speaker notes is a legitimate state (visual-aid decks).
+            # Don't fail; emit an informational marker so the user knows notes were
+            # not found rather than lost.
+            if not markdown.strip():
+                markdown = "<!-- No speaker notes found in deck -->\n"
         elif options.page_markers:
             markdown = _format_default(slides_md, notes_by_slide)
         else:
