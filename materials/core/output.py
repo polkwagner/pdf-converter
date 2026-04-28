@@ -19,7 +19,8 @@ def sanitize_heading_text(text: str) -> str:
       2. Strip backticks.
       3. Strip newlines/tabs and collapse internal whitespace.
       4. Truncate to 80 characters (append U+2026 if truncated).
-      5. If empty after sanitization, return "(untitled)".
+      5. If empty (or only punctuation like a lone `-`) after sanitization,
+         return "(untitled)".
     """
     s = text.replace("`", "")
     s = s.replace("\n", " ").replace("\t", " ")
@@ -27,7 +28,9 @@ def sanitize_heading_text(text: str) -> str:
     s = _DASH_RUN.sub("-", s)
     if len(s) > _MAX_HEADING_LEN:
         s = s[:_MAX_HEADING_LEN].rstrip() + "…"
-    if not s:
+    # Treat lone or all-dash-after-collapse strings as empty: an input of
+    # "---" or "-----" carries no semantic heading content, just a divider.
+    if not s or s.strip("-").strip() == "":
         return "(untitled)"
     return s
 

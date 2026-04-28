@@ -16,7 +16,7 @@ from typing import Optional
 from docling.document_converter import DocumentConverter
 
 from materials.core.base import BaseConverter, ConversionOptions, ConversionResult
-from materials.core.output import sanitize_heading_text
+from materials.core.output import default_output_path, sanitize_heading_text
 from materials.core.verify import (
     VerifyReport,
     check_non_empty,
@@ -31,6 +31,59 @@ HTML_WORD_RETENTION_MIN = 0.60
 
 _HEADING_RE = re.compile(r"^(#{1,2})\s+(.+?)\s*$", re.MULTILINE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_META_CHARSET_RE = re.compile(rb"""<meta[^>]+charset\s*=\s*["']?([\w-]+)""", re.IGNORECASE)
+
+
+def _detect_encoding(raw: bytes) -> str:
+    """Best-effort encoding detection for an HTML byte stream.
+
+    Order:
+      1. UTF BOMs (utf-8-sig, utf-16-le, utf-16-be)
+      2. <meta charset="..."> declaration in the first 4KB
+      3. Default to utf-8
+
+    The caller wraps the returned name with an encoding-error fallback chain
+    (utf-8 → cp1252 → latin-1) so undetected mis-encoded files still read,
+    just with mojibake rather than crashes. cp1252 is the dominant real-world
+    "lying about being utf-8" case (Word HTML exports).
+    """
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
+    if raw.startswith(b"\xff\xfe"):
+        return "utf-16-le"
+    if raw.startswith(b"\xfe\xff"):
+        return "utf-16-be"
+    head = raw[:4096]
+    match = _META_CHARSET_RE.search(head)
+    if match:
+        try:
+            return match.group(1).decode("ascii", errors="ignore").strip().lower() or "utf-8"
+        except Exception:
+            pass
+    return "utf-8"
+
+
+def _read_html_text(path: Path) -> str:
+    """Read an HTML file as text with encoding-aware fallback.
+
+    Tries the detected encoding first, then cp1252 (Word HTML exports), then
+    latin-1 (always succeeds — every byte is a valid latin-1 codepoint, but
+    the result will be mojibake for true non-Western files). Logs a warning
+    when the fallback is taken so the user has a breadcrumb if the output
+    looks corrupted.
+    """
+    raw = path.read_bytes()
+    detected = _detect_encoding(raw)
+    logger = logging.getLogger("html_converter")
+    for encoding in (detected, "cp1252", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    # latin-1 cannot raise UnicodeDecodeError, so this is unreachable in
+    # practice. Log and fall through with errors="replace" as a final guard.
+    logger.warning("All encoding attempts failed; falling back to utf-8 with replacement")
+    return raw.decode("utf-8", errors="replace")
 
 
 def _count_html_words(html: str) -> int:
@@ -83,13 +136,6 @@ def _insert_section_markers(markdown: str) -> str:
     return "".join(parts)
 
 
-def _default_output_path(input_path: str) -> Path:
-    src = Path(input_path)
-    out_dir = src.parent / "converted"
-    out_dir.mkdir(exist_ok=True)
-    return out_dir / src.with_suffix(".md").name
-
-
 class HTMLConverter(BaseConverter):
     """Convert HTML files to markdown using Docling, with section markers."""
 
@@ -103,9 +149,9 @@ class HTMLConverter(BaseConverter):
             return ConversionResult(status="error", error=f"File not found: {input_path}")
 
         try:
-            html = src.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            html = src.read_text(encoding="latin-1")
+            html = _read_html_text(src)
+        except Exception as exc:
+            return ConversionResult(status="error", error=f"Could not read {input_path}: {exc}")
 
         if options.strip_html_noise:
             try:
@@ -130,9 +176,16 @@ class HTMLConverter(BaseConverter):
                 tmp_path = tmp.name
                 tmp.write(html)
 
-            converter = DocumentConverter()
-            docling_result = converter.convert(tmp_path)
-            markdown = docling_result.document.export_to_markdown()
+            try:
+                converter = DocumentConverter()
+                docling_result = converter.convert(tmp_path)
+                markdown = docling_result.document.export_to_markdown()
+            except Exception as exc:
+                logger.warning(f"Docling failed on {input_path}: {exc}")
+                return ConversionResult(
+                    status="error",
+                    error=f"Docling could not parse the HTML: {exc}",
+                )
         finally:
             if tmp_path:
                 Path(tmp_path).unlink(missing_ok=True)
@@ -148,24 +201,30 @@ class HTMLConverter(BaseConverter):
                 status="error",
                 error="Cheap verification failed: output empty",
             )
+        # Capture output_words ONCE before any prefix is added, so the value
+        # used for the verifier and the value reported in statistics agree.
+        output_words = count_words(markdown)
         report.results.append(
-            check_word_retention(source_words, count_words(markdown), HTML_WORD_RETENTION_MIN)
+            check_word_retention(source_words, output_words, HTML_WORD_RETENTION_MIN)
         )
 
         if report.overall == "WARN":
             markdown = f"<!-- VERIFY: WARN -->\n\n{markdown}"
 
-        out_path = Path(options.output_path) if options.output_path else _default_output_path(input_path)
+        out_path = default_output_path(input_path, options.output_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(markdown, encoding="utf-8")
 
+        # Canonical statistics schema (see ConversionResult docstring in base.py).
         return ConversionResult(
             status="success",
             output_file=str(out_path),
             statistics={
-                "sections": markdown.count("<!-- Section "),
+                "words": output_words,
+                "characters": len(markdown),
                 "source_words": source_words,
-                "output_words": count_words(markdown),
                 "verify_status": report.overall,
+                "sections": markdown.count("<!-- Section "),
+                "headings": len(_HEADING_RE.findall(markdown)),
             },
         )

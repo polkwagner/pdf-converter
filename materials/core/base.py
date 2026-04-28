@@ -37,7 +37,34 @@ class ConversionOptions:
 
 @dataclass
 class ConversionResult:
-    """Outcome of a single-file conversion."""
+    """Outcome of a single-file conversion.
+
+    The `statistics` dict has a canonical schema across formats so batch
+    summaries don't KeyError when mixing PDF, DOCX, PPTX, and HTML results.
+    Format-inapplicable fields are left absent (not None) so callers can use
+    `.get(key, default)`. Canonical keys:
+
+    Cross-format
+    ------------
+    - words: int — output word count
+    - characters: int — output character count
+    - source_words: int — input word count (after any pre-cleaning)
+    - verify_status: str — "PASS" | "WARN" | "FAIL" (cheap-check overall)
+
+    Format-specific (present only when applicable)
+    ----------------------------------------------
+    - pages: int — PDF page count
+    - first_page, last_page: str — PDF page-label range
+    - blank_pages: int — PDF blank-page count
+    - pages_marked: int — PDF pages with position markers
+    - sections: int — HTML/DOCX section-marker count
+    - slides: int — PPTX slide count
+    - notes_slides: int — PPTX slides bearing speaker notes
+    - headings: int — heading count
+    - tables: int — table count
+    - comments: int — DOCX comment count (when --full)
+    - footnotes: int — DOCX footnote count
+    """
 
     status: str  # "success" or "error"
     output_file: Optional[str] = None
@@ -65,9 +92,66 @@ class BaseConverter(ABC):
     @abstractmethod
     def convert(self, input_path: str, options: ConversionOptions) -> ConversionResult:
         """Convert one input file. Implementations must respect options.output_path
-        (writing markdown there) and return a ConversionResult."""
+        (writing markdown there) and return a ConversionResult.
+
+        Implementations MUST NOT raise on user-input errors (missing file,
+        unparseable content); return `ConversionResult(status="error", error=...)`
+        instead so callers can aggregate failures across batches."""
 
     def supports(self, path: str | Path) -> bool:
         """True iff this converter handles the file's extension."""
         ext = Path(path).suffix.lower()
         return ext in self.extensions
+
+    def convert_directory(
+        self,
+        input_dir: str,
+        output_dir: Optional[str] = None,
+        recursive: bool = False,
+        save_report: bool = False,
+        page_markers: bool = True,
+    ) -> Dict[str, Any]:
+        """Convert every file in `input_dir` whose extension this converter
+        supports. Returns `{success_count, error_count, reports}`. Subclasses
+        override this to add format-specific batch optimizations (e.g., the
+        PDF warmed-Docling-model trick); the default is a simple per-file loop.
+        """
+        from materials.core.output import default_output_path  # local import to avoid cycle
+
+        in_dir = Path(input_dir)
+        if not in_dir.is_dir():
+            return {"success_count": 0, "error_count": 1, "reports": [],
+                    "error": f"Not a directory: {input_dir}"}
+
+        glob = "**/*" if recursive else "*"
+        candidates = [
+            p for p in in_dir.glob(glob)
+            if p.is_file() and p.suffix.lower() in self.extensions
+        ]
+
+        success_count = 0
+        error_count = 0
+        reports: List[Dict[str, Any]] = []
+        for src in candidates:
+            out_override = None
+            if output_dir:
+                out_override = str(Path(output_dir) / src.with_suffix(".md").name)
+            opts = ConversionOptions(output_path=out_override, page_markers=page_markers)
+            result = self.convert(str(src), opts)
+            if result.status == "success":
+                success_count += 1
+            else:
+                error_count += 1
+            reports.append({
+                "input": str(src),
+                "status": result.status,
+                "output_file": result.output_file,
+                "error": result.error,
+                "statistics": result.statistics,
+            })
+
+        return {
+            "success_count": success_count,
+            "error_count": error_count,
+            "reports": reports,
+        }

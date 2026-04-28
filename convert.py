@@ -8,18 +8,15 @@ DOCX and PPTX.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
 
 from materials.core.base import ConversionOptions
-from materials.formats.pdf import (
-    PDFConverter,
-    RICH_AVAILABLE,
-    parse_page_range,
-    setup_logging,
-)
+from materials.core.logging import RICH_AVAILABLE, setup_logging
 from materials.formats.html import HTMLConverter
+from materials.formats.pdf import PDFConverter, parse_page_range
 
 # Extension → converter instance. Stage 2-4 register more entries here.
 REGISTRY = {}
@@ -35,15 +32,17 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  %(prog)s chapter1.pdf -o chapter1.md\n"
+            "  %(prog)s article.html -o article.md\n"
             "  %(prog)s ./casebooks/ --batch\n"
             "  %(prog)s casebook.pdf --pages 1-50 -o excerpt.md\n"
+            "\n"
+            "Replaces pdf_to_markdown.py, which now forwards here.\n"
         ),
     )
     parser.add_argument("input", help="Input file or directory")
     parser.add_argument("-o", "--output", help="Output markdown file or directory")
     parser.add_argument("--batch", action="store_true",
-                        help="Batch convert PDF files in a directory "
-                             "(HTML/DOCX/PPTX batch support coming in stage 5)")
+                        help="Batch convert every supported file in a directory")
     parser.add_argument("--recursive", "-r", action="store_true",
                         help="Recurse into subdirectories (with --batch)")
     parser.add_argument("--pages",
@@ -62,6 +61,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--save-report", action="store_true",
                         help="Save detailed conversion report JSON (batch mode)")
+    parser.add_argument("--continue-on-error", dest="continue_on_error",
+                        action="store_true", default=True,
+                        help="In batch mode, continue past file failures (default: True)")
+    parser.add_argument("--no-continue-on-error", dest="continue_on_error",
+                        action="store_false",
+                        help="In batch mode, stop on the first file failure")
     parser.add_argument("--log-file", help="Path to log file")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Verbose (DEBUG) logging")
@@ -69,6 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _dispatch_single(input_path: str, args: argparse.Namespace) -> int:
+    logger = logging.getLogger("pdf_converter")
     ext = Path(input_path).suffix.lower()
     converter = REGISTRY.get(ext)
     if converter is None:
@@ -78,6 +84,8 @@ def _dispatch_single(input_path: str, args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+
+    logger.debug(f"dispatch: {ext!r} → {type(converter).__name__}")
 
     pages = parse_page_range(args.pages) if args.pages else None
 
@@ -92,20 +100,43 @@ def _dispatch_single(input_path: str, args: argparse.Namespace) -> int:
         strip_html_noise=args.strip_html_noise,
     )
     result = converter.convert(input_path, options)
-    return 0 if result.status == "success" else 1
+    if result.status != "success":
+        print(f"Error: {result.error or 'conversion failed'}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _dispatch_batch(input_dir: str, args: argparse.Namespace) -> int:
-    # Stage 1 batch is PDF-only — same as legacy.
-    converter = PDFConverter()
-    converter.convert_directory(
-        input_dir,
-        output_dir=args.output,
-        recursive=args.recursive,
-        save_report=args.save_report,
-        page_markers=args.page_markers,
-    )
-    return 0
+    """Iterate the REGISTRY: each registered converter processes the files in
+    `input_dir` whose extensions it owns. Exits non-zero if any file failed
+    (per spec §6.4)."""
+    logger = logging.getLogger("pdf_converter")
+
+    # Group converters by identity so we don't double-call when a converter
+    # owns multiple extensions (e.g., HTMLConverter handles .html and .htm).
+    seen_converters = []
+    for converter in REGISTRY.values():
+        if converter not in seen_converters:
+            seen_converters.append(converter)
+
+    total_success = 0
+    total_errors = 0
+    for converter in seen_converters:
+        logger.debug(f"batch: invoking {type(converter).__name__}")
+        result = converter.convert_directory(
+            input_dir,
+            output_dir=args.output,
+            recursive=args.recursive,
+            save_report=args.save_report,
+            page_markers=args.page_markers,
+        )
+        total_success += result.get("success_count", 0)
+        total_errors += result.get("error_count", 0)
+        if total_errors > 0 and not args.continue_on_error:
+            logger.warning("Stopping batch on first failure (--no-continue-on-error)")
+            return 1
+
+    return 0 if total_errors == 0 else 1
 
 
 def main(argv: list[str] | None = None) -> int:

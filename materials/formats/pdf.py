@@ -40,81 +40,32 @@ except ImportError:
 
 # === Module state preserved from the snapshot ===
 _WHITESPACE_PATTERN = re.compile(r'\s+')
-_normalized_text_cache = {}
 
 
 # === Materials types ===
 from materials.core.base import BaseConverter, ConversionOptions, ConversionResult
+# `setup_logging` lives in `materials.core.logging` (CLI infrastructure, not
+# PDF-specific). Re-exported here for the legacy convert_pdf_to_markdown call
+# sites that reference it via `setup_logging(...)` directly.
+from materials.core.logging import setup_logging  # noqa: F401 — re-export
 
 
 # ============================================================================
 # === BEGIN: bodies moved verbatim from the legacy snapshot (do NOT modify) ==
 # ============================================================================
-# The 17 functions below are pasted unchanged from
-# tests/fixtures/legacy_pdf_to_markdown.py lines 74-1488, in this exact order:
+# The 16 functions below are pasted unchanged from
+# tests/fixtures/legacy_pdf_to_markdown.py, in this order:
 #
-#   setup_logging, print_conversion_report, convert_pdf_to_markdown,
+#   print_conversion_report, convert_pdf_to_markdown,
 #   get_pdf_info, batch_convert_directory, parse_page_range,
 #   extract_page_text_with_pymupdf, get_actual_page_number, to_roman,
 #   to_letters, normalize_text, find_text_position, get_table_page_mapping,
 #   find_table_in_markdown, insert_page_markers_hybrid,
 #   insert_page_markers_provenance, add_page_markers.
+#
+# (setup_logging was the 17th; it now lives in materials.core.logging since
+# it is CLI infrastructure, not PDF-specific.)
 # ============================================================================
-
-def setup_logging(log_file: Optional[str] = None, verbose: bool = False, use_rich: bool = False):
-    """
-    Configure logging to file (and optionally console).
-
-    Args:
-        log_file: Optional path to log file. If None, uses default location.
-        verbose: If True, show DEBUG messages
-        use_rich: If True, suppress console logging (rich handles console output)
-    """
-    # Create logger
-    logger = logging.getLogger('pdf_converter')
-    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
-
-    # Remove existing handlers
-    logger.handlers = []
-
-    # Only add console handler if not using rich (rich handles all console output)
-    if not use_rich:
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)
-        console_format = logging.Formatter('%(message)s')
-        console_handler.setFormatter(console_format)
-        logger.addHandler(console_handler)
-
-    # File handler - DEBUG and above
-    if log_file:
-        file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
-        file_handler.setLevel(logging.DEBUG)
-        file_format = logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        file_handler.setFormatter(file_format)
-        logger.addHandler(file_handler)
-
-        # Log session start to file only
-        file_handler.emit(logging.LogRecord(
-            'pdf_converter', logging.INFO, '', 0,
-            "="*60, (), None
-        ))
-        file_handler.emit(logging.LogRecord(
-            'pdf_converter', logging.INFO, '', 0,
-            f"PDF to Markdown Converter - Session Started", (), None
-        ))
-        file_handler.emit(logging.LogRecord(
-            'pdf_converter', logging.INFO, '', 0,
-            f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", (), None
-        ))
-        file_handler.emit(logging.LogRecord(
-            'pdf_converter', logging.INFO, '', 0,
-            "="*60, (), None
-        ))
-
-    return logger
 
 
 def print_conversion_report(report: Dict, logger: logging.Logger = None):
@@ -1302,14 +1253,17 @@ def insert_page_markers_provenance(md_text: str, doc, pdf_path: str = None,
     # Get PDF page labels if available (for non-sequential page numbering)
     page_labels = None
     if pdf_path:
+        pdf_doc = None
         try:
             pdf_doc = fitz.open(pdf_path)
             page_labels = pdf_doc.get_page_labels()
             if page_labels:
                 logger.debug(f"PDF has page labels: {page_labels}")
-            pdf_doc.close()
         except Exception as e:
             logger.debug(f"Could not read PDF page labels: {e}")
+        finally:
+            if pdf_doc is not None:
+                pdf_doc.close()
 
     # Build mapping of page -> first text item on that page
     first_items_by_page = {}
@@ -1489,28 +1443,36 @@ class PDFConverter(BaseConverter):
 
     def convert(self, input_path: str, options: ConversionOptions) -> ConversionResult:
         logger = logging.getLogger("pdf_converter")
-        report = convert_pdf_to_markdown(
-            input_path,
-            output_path=options.output_path,
-            pages=options.pages,
-            extract_images=options.extract_images,
-            ocr=options.ocr,
-            page_markers=options.page_markers,
-            quiet=options.quiet,
-            logger=logger,
-        )
+        try:
+            report = convert_pdf_to_markdown(
+                input_path,
+                output_path=options.output_path,
+                pages=options.pages,
+                extract_images=options.extract_images,
+                ocr=options.ocr,
+                page_markers=options.page_markers,
+                quiet=options.quiet,
+                logger=logger,
+            )
+        except FileNotFoundError as exc:
+            return ConversionResult(status="error", error=str(exc))
+        except Exception as exc:
+            return ConversionResult(status="error", error=f"PDF conversion failed: {exc}")
         return ConversionResult.from_legacy(report)
 
     def convert_directory(
         self,
         input_dir: str,
-        output_dir: Optional[str],
-        recursive: bool,
-        save_report: bool,
-        page_markers: bool,
-    ) -> None:
+        output_dir: Optional[str] = None,
+        recursive: bool = False,
+        save_report: bool = False,
+        page_markers: bool = True,
+    ) -> Dict:
+        """Convert every supported file in `input_dir`. Returns a summary dict
+        with at least `success_count` and `error_count` keys so callers can
+        propagate exit codes (spec §6.4)."""
         logger = logging.getLogger("pdf_converter")
-        batch_convert_directory(
+        result = batch_convert_directory(
             input_dir,
             output_dir=output_dir,
             recursive=recursive,
@@ -1518,3 +1480,4 @@ class PDFConverter(BaseConverter):
             page_markers=page_markers,
             logger=logger,
         )
+        return result if isinstance(result, dict) else {"success_count": 0, "error_count": 0}
