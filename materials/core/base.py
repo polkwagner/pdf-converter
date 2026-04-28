@@ -7,7 +7,7 @@ introduces this abstraction; stages 2-4 add subclasses.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -112,11 +112,17 @@ class BaseConverter(ABC):
         save_report: bool = False,
         page_markers: bool = True,
         workers: int = 1,
+        options: Optional["ConversionOptions"] = None,
     ) -> Dict[str, Any]:
         """Convert every file in `input_dir` whose extension this converter
         supports. Returns `{success_count, error_count, reports}`. Set
         `workers > 1` for ProcessPoolExecutor parallelism (each worker pays
         per-process model-warmup cost; useful for large batches).
+
+        `options`: when provided, all format-specific flags are forwarded to
+        workers verbatim (with output_path and workers overridden). When
+        None, a minimal ConversionOptions is constructed from the scalar
+        parameters (backward-compatible).
         """
         from materials.core.output import default_output_path  # local import to avoid cycle
 
@@ -133,12 +139,21 @@ class BaseConverter(ABC):
 
         if workers > 1 and len(candidates) > 1:
             from materials.core.parallel import parallel_convert_files
-            opts = ConversionOptions(
-                output_path=output_dir,
-                page_markers=page_markers,
-                save_report=save_report,
+            if options is None:
+                # Backward-compat: build minimal options from scalar params
+                opts = ConversionOptions(
+                    output_path=output_dir,
+                    page_markers=page_markers,
+                    save_report=save_report,
+                    workers=workers,
+                )
+            else:
+                # Caller provided full options; pin output_path and workers
+                opts = replace(options, output_path=output_dir, workers=workers)
+            return parallel_convert_files(
+                self.__class__, candidates, opts, workers,
+                input_dir=str(in_dir), recursive=recursive,
             )
-            return parallel_convert_files(self.__class__, candidates, opts, workers)
 
         success_count = 0
         error_count = 0

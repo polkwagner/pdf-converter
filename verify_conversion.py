@@ -319,7 +319,15 @@ def batch_verify(directory: str, pdf_dir: str = None, pattern: str = "*.md") -> 
     print(f"Summary: {passed} passed, {warnings} warnings, {failed} failed")
     print(f"{'='*70}\n")
 
-    return results
+    status = "pass"
+    for r in results.values():
+        if r.get("status") == "FAILED":
+            status = "fail"
+            break
+        if r.get("status") == "WARNING" and status != "fail":
+            status = "warn"
+
+    return {"status": status, "files": results}
 
 
 def main():

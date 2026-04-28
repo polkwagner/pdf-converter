@@ -1468,6 +1468,7 @@ class PDFConverter(BaseConverter):
         save_report: bool = False,
         page_markers: bool = True,
         workers: int = 1,
+        options: Optional[ConversionOptions] = None,
     ) -> Dict:
         """Serial path: warmed-model trick (legacy batch_convert_directory).
         Parallel path: delegate to BaseConverter.convert_directory which uses
@@ -1477,6 +1478,7 @@ class PDFConverter(BaseConverter):
             return super().convert_directory(
                 input_dir, output_dir=output_dir, recursive=recursive,
                 save_report=save_report, page_markers=page_markers, workers=workers,
+                options=options,
             )
         logger = logging.getLogger("pdf_converter")
         result = batch_convert_directory(

@@ -160,6 +160,24 @@ def _dispatch_batch(input_dir: str, args: argparse.Namespace) -> int:
         if converter not in seen_converters:
             seen_converters.append(converter)
 
+    pages = parse_page_range(args.pages) if args.pages else None
+    batch_options = ConversionOptions(
+        output_path=args.output,
+        page_markers=args.page_markers,
+        pages=pages,
+        ocr=args.ocr,
+        extract_images=args.images,
+        quiet=False,
+        verbose=args.verbose,
+        save_report=args.save_report,
+        full=args.full,
+        show_revisions=args.show_revisions,
+        keep_images=args.keep_images,
+        notes_only=args.notes_only,
+        strip_html_noise=args.strip_html_noise,
+        workers=args.workers,
+    )
+
     total_success = 0
     total_errors = 0
     for converter in seen_converters:
@@ -171,6 +189,7 @@ def _dispatch_batch(input_dir: str, args: argparse.Namespace) -> int:
             save_report=args.save_report,
             page_markers=args.page_markers,
             workers=args.workers,
+            options=batch_options,
         )
         total_success += result.get("success_count", 0)
         total_errors += result.get("error_count", 0)
