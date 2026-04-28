@@ -20,6 +20,11 @@ from docx import Document
 from docx.oxml.ns import qn
 from lxml import etree
 
+# Safe XML parser: don't resolve external entities, don't make network requests.
+# Mitigates XXE attacks where a crafted .docx contains DTD entity declarations
+# pointing at file:// URLs or http:// servers.
+_SAFE_XML_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
+
 OUT = Path(__file__).resolve().parent.parent / "sample_with_comments.docx"
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -63,7 +68,7 @@ def _inject_comment_into_archive() -> None:
     )
     parts["word/comments.xml"] = comments_xml
 
-    doc_tree = etree.fromstring(parts["word/document.xml"])
+    doc_tree = etree.fromstring(parts["word/document.xml"], _SAFE_XML_PARSER)
     body = doc_tree.find(qn("w:body"))
     for paragraph in body.findall(qn("w:p")):
         for run in paragraph.findall(qn("w:r")):
@@ -92,7 +97,7 @@ def _inject_comment_into_archive() -> None:
     )
 
     rels_path = "word/_rels/document.xml.rels"
-    rels_tree = etree.fromstring(parts[rels_path])
+    rels_tree = etree.fromstring(parts[rels_path], _SAFE_XML_PARSER)
     R = "http://schemas.openxmlformats.org/package/2006/relationships"
     new_rel = etree.SubElement(rels_tree, f"{{{R}}}Relationship")
     new_rel.set("Id", "rIdComments")
@@ -106,7 +111,7 @@ def _inject_comment_into_archive() -> None:
     )
 
     ct_path = "[Content_Types].xml"
-    ct_tree = etree.fromstring(parts[ct_path])
+    ct_tree = etree.fromstring(parts[ct_path], _SAFE_XML_PARSER)
     CT = "http://schemas.openxmlformats.org/package/2006/content-types"
     override = etree.SubElement(ct_tree, f"{{{CT}}}Override")
     override.set("PartName", "/word/comments.xml")
@@ -129,7 +134,7 @@ def _inject_tracked_change() -> None:
         for name in zin.namelist():
             parts[name] = zin.read(name)
 
-    doc_tree = etree.fromstring(parts["word/document.xml"])
+    doc_tree = etree.fromstring(parts["word/document.xml"], _SAFE_XML_PARSER)
     body = doc_tree.find(qn("w:body"))
     paragraphs = body.findall(qn("w:p"))
     target = None
@@ -190,7 +195,7 @@ def _inject_footnote() -> None:
     )
     parts["word/footnotes.xml"] = footnotes_xml
 
-    doc_tree = etree.fromstring(parts["word/document.xml"])
+    doc_tree = etree.fromstring(parts["word/document.xml"], _SAFE_XML_PARSER)
     body = doc_tree.find(qn("w:body"))
     paragraphs = body.findall(qn("w:p"))
     target = None
@@ -215,7 +220,7 @@ def _inject_footnote() -> None:
     )
 
     rels_path = "word/_rels/document.xml.rels"
-    rels_tree = etree.fromstring(parts[rels_path])
+    rels_tree = etree.fromstring(parts[rels_path], _SAFE_XML_PARSER)
     R = "http://schemas.openxmlformats.org/package/2006/relationships"
     new_rel = etree.SubElement(rels_tree, f"{{{R}}}Relationship")
     new_rel.set("Id", "rIdFootnotes")
@@ -229,7 +234,7 @@ def _inject_footnote() -> None:
     )
 
     ct_path = "[Content_Types].xml"
-    ct_tree = etree.fromstring(parts[ct_path])
+    ct_tree = etree.fromstring(parts[ct_path], _SAFE_XML_PARSER)
     CT = "http://schemas.openxmlformats.org/package/2006/content-types"
     override = etree.SubElement(ct_tree, f"{{{CT}}}Override")
     override.set("PartName", "/word/footnotes.xml")

@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from lxml import etree
 from docling.document_converter import DocumentConverter
 
 from materials.core.base import BaseConverter, ConversionOptions, ConversionResult
@@ -40,6 +41,11 @@ from materials.core.verify import (
     count_words,
 )
 
+
+# Safe XML parser: don't resolve external entities, don't make network requests.
+# Mitigates XXE attacks where a crafted .docx contains DTD entity declarations
+# pointing at file:// URLs or http:// servers.
+_SAFE_XML_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
 
 DOCX_WORD_RETENTION_MIN = 0.90
 
@@ -90,28 +96,28 @@ def _extract_comments(doc) -> List[_CommentEntry]:
     if comments_part is None:
         return []
 
-    from lxml import etree
-    comments_root = etree.fromstring(comments_part.blob)
+    comments_root = etree.fromstring(comments_part.blob, _SAFE_XML_PARSER)
 
     # Map comment IDs to their anchored body-text snippet.
+    # in_range persists across paragraph boundaries so that commentRangeStart
+    # in paragraph N and commentRangeEnd in paragraph N+1 are reconciled correctly.
     anchored: dict[str, str] = {}
     body = doc.element.body
-    for paragraph in body.iter(_qn("p")):
-        in_range: dict[str, list[str]] = {}
-        for child in paragraph.iter():
-            tag = child.tag
-            if tag == _qn("commentRangeStart"):
-                cid = child.get(_qn("id"))
-                if cid is not None:
-                    in_range[cid] = []
-            elif tag == _qn("commentRangeEnd"):
-                cid = child.get(_qn("id"))
-                if cid is not None and cid in in_range:
-                    anchored[cid] = "".join(in_range.pop(cid)).strip()
-            elif tag == _qn("t") and in_range:
-                if child.text:
-                    for collected in in_range.values():
-                        collected.append(child.text)
+    in_range: dict[str, list[str]] = {}
+    for child in body.iter():
+        tag = child.tag
+        if tag == _qn("commentRangeStart"):
+            cid = child.get(_qn("id"))
+            if cid is not None:
+                in_range[cid] = []
+        elif tag == _qn("commentRangeEnd"):
+            cid = child.get(_qn("id"))
+            if cid is not None and cid in in_range:
+                anchored[cid] = "".join(in_range.pop(cid)).strip()
+        elif tag == _qn("t") and in_range:
+            if child.text:
+                for collected in in_range.values():
+                    collected.append(child.text)
 
     comments: List[_CommentEntry] = []
     for c in comments_root:
@@ -144,8 +150,7 @@ def _extract_footnotes(doc) -> List[Tuple[str, str]]:
     if footnotes_part is None:
         return []
 
-    from lxml import etree
-    root = etree.fromstring(footnotes_part.blob)
+    root = etree.fromstring(footnotes_part.blob, _SAFE_XML_PARSER)
     out: List[Tuple[str, str]] = []
     for fn in root:
         if fn.tag != _qn("footnote"):
@@ -161,23 +166,29 @@ def _extract_footnotes(doc) -> List[Tuple[str, str]]:
 
 
 def _extract_revisions(doc) -> List[_Revision]:
-    """Return all w:ins / w:del text content in document order."""
+    """Return all w:ins / w:del text content from top-level body paragraphs.
+
+    Excludes revisions nested inside tables, headers, footers, and footnotes
+    because Docling renders those structures inline; surfacing their
+    revisions again would duplicate content.
+    """
     revisions: List[_Revision] = []
     body = doc.element.body
-    ins_tag = _qn("ins")
-    del_tag = _qn("del")
-    t_tag = _qn("t")
-    deltext_tag = _qn("delText")
-    # iter() walks in document order.
-    for elem in body.iter():
-        if elem.tag == ins_tag:
-            text_parts = [t.text for t in elem.iter(t_tag) if t.text]
-            if text_parts:
-                revisions.append(_Revision("ins", "".join(text_parts)))
-        elif elem.tag == del_tag:
-            text_parts = [t.text for t in elem.iter(deltext_tag) if t.text]
-            if text_parts:
-                revisions.append(_Revision("del", "".join(text_parts)))
+    # Only iterate direct children that are paragraphs (w:p).
+    # Tables (w:tbl) and structured content blocks are skipped to avoid
+    # duplicating content that Docling already renders inline.
+    for top_level_child in body:
+        if top_level_child.tag != _qn("p"):
+            continue
+        for elem in top_level_child.iter():
+            if elem.tag == _qn("ins"):
+                text_parts = [t.text for t in elem.iter(_qn("t")) if t.text]
+                if text_parts:
+                    revisions.append(_Revision("ins", "".join(text_parts)))
+            elif elem.tag == _qn("del"):
+                text_parts = [t.text for t in elem.iter(_qn("delText")) if t.text]
+                if text_parts:
+                    revisions.append(_Revision("del", "".join(text_parts)))
     return revisions
 
 
