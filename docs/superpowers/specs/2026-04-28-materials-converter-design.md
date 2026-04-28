@@ -287,7 +287,33 @@ Five stages. Each stage is independently shippable and useful.
 - `verify_cli.py` standalone verifier consolidating `verify_conversion.py` + `verify_page_markers.py`; old scripts become deprecation shims (removed at next cycle).
 - README final pass; `CLAUDE.md` final pass to remove all stage-1-through-4 staleness and reflect the shipped state.
 
-**Ships:** the whole suite, polished.
+**Ships:** the whole Python suite, polished.
+
+### Stage 6 — Claude Code skill wrapper
+
+**Goal:** make the converter accessible from natural-language conversation in Claude Code via a thin skill that shells out to the Python CLI.
+
+- Create `~/.claude/skills/materials-md/SKILL.md` (a markdown instruction sheet, not Python code) — describes when to invoke the converter, how to map natural-language requests to flags, and where to put output.
+- Skill is a **thin dispatcher**, not a reimplementation. It does nothing more than recognize the request, pick flags, shell out to `~/Penn Law Dropbox/Polk Wagner/code/pdf-converter/convert.py`, and return the output path.
+- Document composition with existing skills: convert → eddie, convert → polk-document, convert → factual-pipeline-orchestrator.
+- No new dependencies; the Python tool does all the work.
+
+**Ships:** natural-language entry point to the converter, composable with the rest of the skill ecosystem.
+
+### Stage 7 (deferred) — Subagent batch orchestration
+
+Not in scope for this project until evidence justifies it. Possible future work: a skill that orchestrates "convert this whole folder, then route each output through eddie / a verifier / a follow-up skill," using parallel subagents per file. Decision deferred until stages 1-6 ship and the manual workflow is observed to be painful enough to need orchestration.
+
+## 8.5 Architecture decision: Python core + thin skill wrapper
+
+The deterministic conversion engine is a Python project (stages 1-5). A Claude Code skill wraps it as a thin dispatcher (stage 6). Reasoning:
+
+- **Determinism wins for legal materials.** The same PPTX must always produce the same markdown — a verifier system only catches silent failures if the underlying conversion is reproducible. A Claude-mediated conversion would re-summarize content nondeterministically, costs hundreds of dollars per casebook in tokens, runs minutes-to-hours instead of seconds, and silently drops content the verifier can't predict.
+- **The existing PDF code is battle-tested.** The 3-strategy marker insertion (Docling tokens → provenance → PyMuPDF + RapidFuzz) is real engineering. Rebuilding it as a Claude skill would be a regression.
+- **Composability.** A Python CLI runs in cron, in Make, in CI, in shell pipelines. A skill only runs inside Claude Code. The Python project is the durable artifact.
+- **The skill earns its keep at the natural-language boundary.** It maps "give me just the lecture text" → `--notes-only`, "keep all reviewer comments" → `--full`, and routes output to follow-up skills (eddie, polk-document, factual-pipeline-orchestrator). It does not replicate conversion logic.
+
+The trap to avoid is a skill that *re-implements* conversion in Claude. The skill must be a dispatcher. Conversion logic lives in Python; only flag-mapping and routing live in the skill.
 
 ## 9. Tradeoffs (made explicit)
 
